@@ -20,9 +20,9 @@ on:
   workflow_dispatch:
     inputs:
       run_type:
-        description: "monday / friday = build that report now (ignores the time window); auto = behave like a scheduled trigger (for an outside scheduler)"
+        description: "monday / friday = build that report now (ignores the time window); auto = behave like a scheduled trigger (for an outside scheduler); test_email = email the current Monday dry-run report with [TEST] in the subject to check SMTP delivery (never recorded or committed; dry_run is ignored)"
         type: choice
-        options: [monday, friday, auto]
+        options: [monday, friday, auto, test_email]
         required: true
         default: monday
       dry_run:
@@ -67,7 +67,7 @@ jobs:
           now = datetime.fromisoformat(os.environ["GATE_NOW"]) if os.environ.get("GATE_NOW") else datetime.now(timezone.utc)
           local = now.astimezone(NY)
           requested = os.environ.get("INPUT_RUN_TYPE", "")
-          if os.environ.get("EVENT") == "workflow_dispatch" and requested in ("monday", "friday"):
+          if os.environ.get("EVENT") == "workflow_dispatch" and requested in ("monday", "friday", "test_email"):
               run, run_type, reason = True, requested, f"manual {requested} run"
           else:
               window = WINDOWS.get(local.weekday())
@@ -124,6 +124,11 @@ jobs:
         run: |
           # Optional portfolio mode: holdings come from a secret, never from the repo.
           if [ -n "$HOLDINGS_YAML" ]; then printf '%s\n' "$HOLDINGS_YAML" > holdings.yaml; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_type }}" = "test_email" ]; then
+            # Delivery check: never writes history.db, records a run or alert, or commits.
+            python -m tvreport test-email
+            exit $?
+          fi
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_type }}" != "auto" ]; then
             args="--type ${{ inputs.run_type }} --force"
           else
@@ -145,7 +150,7 @@ jobs:
       # Failures outside the report step (e.g. install): the report step emails its
       # own failures. Both share one failure email per run type per window.
       - name: Failure email for errors outside the report step
-        if: failure() && steps.gate.outputs.run == 'true' && steps.report.outcome != 'failure'
+        if: failure() && steps.gate.outputs.run == 'true' && steps.report.outcome != 'failure' && inputs.run_type != 'test_email'
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -158,7 +163,7 @@ jobs:
 
       # Runs after failures too, so a recorded failure alert reaches later triggers.
       - name: Commit history and reports
-        if: always() && steps.gate.outputs.run == 'true' && steps.sent.outputs.sent != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        if: always() && steps.gate.outputs.run == 'true' && steps.sent.outputs.sent != 'true' && !(github.event_name == 'workflow_dispatch' && (inputs.dry_run || inputs.run_type == 'test_email'))
         run: |
           git add data/history.db reports/ 2>/dev/null || true
           if git diff --cached --quiet; then echo "nothing new to commit"; exit 0; fi

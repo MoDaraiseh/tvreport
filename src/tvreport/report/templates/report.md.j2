@@ -19,7 +19,10 @@ _{{ empty }}_
 # {{ r.title }} — {{ r.run_date.strftime("%a") }} {{ r.run_date.day }} {{ r.run_date.strftime("%b %Y") }}
 
 Generated {{ r.generated_times|join(" · ") }}
-{% if r.dry_run %}
+{% if r.test_email %}
+
+> **TEST EMAIL** — sent only to check delivery; not recorded in history.
+{% elif r.dry_run %}
 
 > **DRY RUN** — not emailed, not recorded in history.
 {% endif %}

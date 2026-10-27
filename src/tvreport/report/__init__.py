@@ -48,6 +48,7 @@ class ReportData:
     portfolio: list[dict[str, Any]] | None = None
     performance: PerformanceSection | None = None
     dry_run: bool = False
+    test_email: bool = False  # sent only to verify delivery; never recorded
     disclaimer: str = DISCLAIMER
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -58,7 +59,7 @@ class ReportData:
     @property
     def subject(self) -> str:
         d = self.run_date
-        prefix = "[DRY RUN] " if self.dry_run else ""
+        prefix = "[TEST] " if self.test_email else "[DRY RUN] " if self.dry_run else ""
         return f"{prefix}{self.title} — {d:%a} {d.day} {d:%b %Y}"
 
     @property

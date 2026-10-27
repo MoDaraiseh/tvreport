@@ -50,7 +50,7 @@
 <h1 style="font-size:22px;margin:4px 0 2px;">{{ r.title }}</h1>
 <p style="margin:0;color:#374151;font-size:14px;">US stock market · {{ r.run_date.strftime("%A") }} {{ r.run_date.day }} {{ r.run_date.strftime("%B %Y") }}</p>
 <p style="{{ note }}">Generated {{ r.generated_times|join(" · ") }}</p>
-{% if r.dry_run %}<p style="font-size:13px;color:#92400e;background:#fef3c7;padding:6px 8px;border-radius:4px;">DRY RUN — not emailed, not recorded in history.</p>{% endif %}
+{% if r.test_email %}<p style="font-size:13px;color:#92400e;background:#fef3c7;padding:6px 8px;border-radius:4px;">TEST EMAIL — sent only to check delivery; not recorded in history.</p>{% elif r.dry_run %}<p style="font-size:13px;color:#92400e;background:#fef3c7;padding:6px 8px;border-radius:4px;">DRY RUN — not emailed, not recorded in history.</p>{% endif %}
 {% for n in r.session_notes %}<p style="font-size:13px;color:#1e3a8a;background:#eff6ff;padding:6px 8px;border-radius:4px;margin:8px 0;">{{ n }}</p>{% endfor %}
 
 <h2 style="{{ h2 }}">Market overview</h2>

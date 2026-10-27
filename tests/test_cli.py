@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import closing
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.conftest import FakeProvider, retime
 from tvreport import cli
-from tvreport.history import History
+from tvreport.history import History, RunRecord
 from tvreport.providers import ProviderError
 from tvreport.schedule import NY
 
@@ -60,7 +63,21 @@ def harness(monkeypatch, tmp_path, universe_raw, indices_raw):
             ]
         )
 
-    state.update(run=run, db=db, reports=reports)
+    def test_email(*extra: str) -> int:
+        return cli.main(
+            [
+                "test-email",
+                "--db",
+                str(db),
+                "--reports-dir",
+                str(reports),
+                "--holdings",
+                str(tmp_path / "none.yaml"),
+                *extra,
+            ]
+        )
+
+    state.update(run=run, test_email=test_email, db=db, reports=reports)
     return state
 
 
@@ -148,3 +165,62 @@ def test_failed_alert_send_is_not_recorded(harness, monkeypatch):
     harness["provider"] = FakeProvider(None, None, error=ProviderError("HTTP 503"))  # type: ignore[arg-type]
     assert harness["run"]("--type", "auto") == 1
     assert not History(harness["db"]).alert_already_sent(date(2026, 11, 2), "monday")
+
+
+# ------------------------------------------------------------------ test-email
+def _seed_history(db: Path) -> bytes:
+    """A history.db holding one recorded run; returns its exact bytes."""
+
+    History(db).record_run(
+        RunRecord(date(2026, 10, 26), "monday", "x", date(2026, 10, 23), "SP:SPX", 1.0, 1000), []
+    )
+    return db.read_bytes()
+
+
+def test_test_email_sends_marked_report_and_writes_no_history(harness):
+    before = _seed_history(harness["db"])
+    harness["now"] = datetime(2026, 11, 2, 14, 0, tzinfo=NY)  # outside any run window
+    assert harness["test_email"]() == 0
+    assert len(harness["sent"]) == 1
+    msg = harness["sent"][0]
+    assert msg["Subject"].startswith("[TEST] Week Ahead — ")
+    body = msg.get_body(preferencelist=("plain",)).get_content()
+    assert "TEST EMAIL — sent only to check delivery" in body
+    assert harness["db"].read_bytes() == before  # byte-for-byte untouched
+    history = History(harness["db"])
+    assert not history.run_exists(date(2026, 11, 2), "monday")
+    assert not history.alert_already_sent(date(2026, 11, 2), "monday")
+
+
+def test_test_email_creates_no_history_file(harness):
+    assert harness["test_email"]() == 0
+    assert len(harness["sent"]) == 1
+    assert not harness["db"].exists()
+
+
+def test_test_email_failure_records_no_alert_and_sends_nothing(harness):
+    before = _seed_history(harness["db"])
+    harness["provider"] = FakeProvider(None, None, error=ProviderError("HTTP 503"))  # type: ignore[arg-type]
+    assert harness["test_email"]() == 1
+    assert harness["sent"] == []  # no failure email for a delivery test
+    assert harness["db"].read_bytes() == before
+
+
+def test_test_email_missing_secrets_named(harness, monkeypatch, caplog):
+    monkeypatch.delenv("SMTP_PASSWORD")
+    monkeypatch.setenv("REPORT_TO", "")
+    assert harness["test_email"]() == 1
+    assert harness["provider_calls"] == 0 and harness["sent"] == []
+    message = caplog.text
+    assert "SMTP_PASSWORD" in message and "REPORT_TO" in message
+    assert "SMTP_HOST" not in message.split("missing SMTP settings:")[1].split(".")[0]
+    assert "s3cret" not in message
+
+
+def test_dry_run_cannot_modify_an_existing_history_db(harness):
+    # An older database without the `alerts` table: opening it normally would add it.
+    with closing(sqlite3.connect(harness["db"])) as conn, conn:
+        conn.execute("CREATE TABLE runs (id INTEGER PRIMARY KEY, run_date TEXT, run_type TEXT)")
+    before = harness["db"].read_bytes()
+    assert harness["run"]("--type", "auto", "--dry-run") == 0
+    assert harness["db"].read_bytes() == before

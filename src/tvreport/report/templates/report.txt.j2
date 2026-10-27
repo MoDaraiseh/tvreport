@@ -16,7 +16,9 @@
 {% endmacro %}
 {{ r.title|upper }} — US STOCK MARKET — {{ r.run_date.strftime("%A") }} {{ r.run_date.day }} {{ r.run_date.strftime("%B %Y") }}
 Generated {{ r.generated_times|join(" · ") }}
-{% if r.dry_run %}
+{% if r.test_email %}
+TEST EMAIL — sent only to check delivery; not recorded in history.
+{% elif r.dry_run %}
 DRY RUN — not emailed, not recorded in history.
 {% endif %}
 {% for n in r.session_notes %}

@@ -75,6 +75,14 @@ Credentials are never logged or printed, and secret values are scrubbed from err
 3. **Allow the workflow to push** `history.db` and the reports: *Settings → Actions → General → Workflow permissions → Read and write*.
 4. **Test it.** *Actions → weekly-report → Run workflow* with `run_type = monday` and `dry_run = true` builds a report and attaches it to the run as an artifact. Run it once with `dry_run = false` to receive a real email.
 
+### Check email delivery (`test_email`)
+
+*Actions → weekly-report → Run workflow*, set `run_type` to **`test_email`**, then **Run workflow**. This builds the current Monday ("Week Ahead") dry-run report from live data and emails it through the real SMTP secrets, with **`[TEST]`** at the start of the subject. The `dry_run` box is ignored for this option.
+
+- It never writes `data/history.db`: it reads history through a temporary copy. It records no run and no failure alert, and commits nothing, so it can't make a real Monday or Friday run skip or stay quiet.
+- If secrets are missing, it fails with a message naming them, for example `missing SMTP settings: SMTP_PASSWORD, REPORT_TO`.
+- Locally: `python -m tvreport test-email` (or `--type friday` after the close), with the five variables set in your environment.
+
 ### Schedule (timezone-critical)
 
 GitHub cron is UTC-only and often delayed or skipped, so [weekly-report.yml](.github/workflows/weekly-report.yml) triggers **every 15 minutes across both the EDT and EST equivalents** of each window. The code then decides in `America/New_York` (zoneinfo, so DST is handled) whether the trigger falls inside the window:

@@ -15,16 +15,19 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import sys
 import tempfile
 import traceback
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 from .config import PROJECT_ROOT, load_config
 from .history import DEFAULT_DB_PATH, History
 from .notify import (
+    NotifyConfigError,
     SmtpSettings,
     build_message,
     failure_message,
@@ -63,6 +66,22 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--holdings", type=Path, default=None)
     run.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
     run.add_argument("--reports-dir", type=Path, default=PROJECT_ROOT / "reports")
+
+    test = sub.add_parser(
+        "test-email",
+        help="email the current dry-run report with [TEST] in the subject, to verify SMTP "
+        "delivery; never writes history, records a run or an alert",
+    )
+    test.add_argument(
+        "--type",
+        choices=["monday", "friday"],
+        default="monday",
+        help="report to build (friday needs a closed session); default monday",
+    )
+    test.add_argument("--config", type=Path, default=None)
+    test.add_argument("--holdings", type=Path, default=None)
+    test.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+    test.add_argument("--reports-dir", type=Path, default=PROJECT_ROOT / "reports")
     return p
 
 
@@ -77,6 +96,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     args = _parser().parse_args(argv)
+    if args.command == "test-email":
+        return _test_email(args)
     now = _now()
 
     run_type = resolve_run_type(args.type, now)
@@ -95,11 +116,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not decision.proceed:
             return 0
 
-    if args.dry_run and not args.db.exists():
-        # A dry run never writes history -- not even an empty database file.
-        history = History(Path(tempfile.mkdtemp(prefix="tvreport-dry-")) / "history.db")
-    else:
-        history = History(args.db)
+    # A dry run never writes history (not even a schema update or an empty file).
+    history = _scratch_history(args.db) if args.dry_run else History(args.db)
     run_date = now.astimezone(NY).date()
     if not args.dry_run and history.run_exists(run_date, run_type):
         log.info(
@@ -175,6 +193,63 @@ def _alert_once(
         history.record_alert(run_date, run_type, _now().isoformat(timespec="seconds"))
     except Exception as mail_exc:
         log.error("could not send the failure email: %s", scrub(str(mail_exc), settings=settings))
+
+
+def _scratch_history(db: Path) -> History:
+    """History backed by a temporary copy of `db`: reads see the real data (e.g.
+    Monday's picks for a Friday report) but no write can ever reach `db`."""
+
+    scratch = Path(tempfile.mkdtemp(prefix="tvreport-scratch-")) / "history.db"
+    if db.exists():
+        shutil.copy2(db, scratch)
+    return History(scratch)
+
+
+def _test_email(args: argparse.Namespace) -> int:
+    """Build the current dry-run report and email it with [TEST] in the subject.
+
+    Never touches data/history.db: no run, picks or failure alert is recorded, so
+    it can't make the real Monday/Friday run skip or suppress anything."""
+
+    try:
+        settings = smtp_settings()
+    except NotifyConfigError as exc:
+        log.error(
+            "cannot send the test email -- %s. Add them as repository secrets (Settings > "
+            "Secrets and variables > Actions) or, locally, as environment variables.",
+            exc,
+        )
+        return 1
+    now = _now()
+    try:
+        cfg = load_config(args.config)
+        outcome = build_report(
+            args.type,
+            now,
+            cfg,
+            make_provider(cfg.provider),
+            _scratch_history(args.db),
+            dry_run=True,
+            holdings_path=args.holdings,
+            calendar=MarketCalendar(),
+        )
+        report = replace(outcome.report, test_email=True)
+        save_report(report, args.reports_dir)
+        send(
+            build_message(settings, report.subject, render_text(report), render_html(report)),
+            settings,
+        )
+    except Exception as exc:
+        log.error("test email failed: %s", scrub(f"{type(exc).__name__}: {exc}", settings=settings))
+        log.error(
+            "traceback:\n%s",
+            scrub("".join(traceback.format_exception(exc)), settings=settings),
+        )
+        return 1
+    log.info(
+        "test email sent to %d recipient(s); nothing was recorded in history", len(settings.to)
+    )
+    return 0
 
 
 if __name__ == "__main__":

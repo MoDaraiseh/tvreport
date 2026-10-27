@@ -183,3 +183,26 @@ def test_workflow_gate_manual_runs():
         "run_type": "friday",
     }
     assert run_gate(wednesday, "workflow_dispatch", "auto")["run"] == "false"  # auto = gated
+
+
+def test_workflow_test_email_option():
+    wednesday = utc("2026-11-04 15:00")
+    assert run_gate(wednesday, "workflow_dispatch", "test_email") == {
+        "run": "true",
+        "run_type": "test_email",
+    }
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "python -m tvreport test-email" in text
+    steps = {}
+    current = None
+    for line in text.splitlines():
+        if line.strip().startswith("- name:"):
+            current = line.split("- name:", 1)[1].strip()
+        elif current and line.strip().startswith("if:"):
+            steps[current] = line.split("if:", 1)[1]
+    # the test email must never commit history or send/record a failure alert
+    assert "inputs.run_type == 'test_email'" in steps["Commit history and reports"]
+    assert (
+        "inputs.run_type != 'test_email'"
+        in steps["Failure email for errors outside the report step"]
+    )
