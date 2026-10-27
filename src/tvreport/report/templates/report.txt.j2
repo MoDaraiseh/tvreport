@@ -1,0 +1,84 @@
+{% macro picks(rows, empty) %}
+{% if rows %}
+{% for p in rows %}
+{{ "%2d" % p.rank }}. {{ p.ticker }} — {{ p.description }} ({{ p.sector }})
+    price {{ p.price|num }} · score {{ p.score|num(1) }} · 1W {{ p.weekly_pct|pct }} · 1M {{ p.perf_1m|pct }}
+    {{ p.rationale }}
+{% endfor %}
+{% else %}
+{{ empty }}
+{% endif %}
+{% endmacro %}
+{% macro stats(rows) %}
+{% for s in rows %}
+  {{ s.list }}: {{ s.measured }}/{{ s.picks }} measured · avg {{ s.avg_return_pct|pct(2) }} · vs S&P {{ s.avg_excess_pct|pct(2) }} · beat S&P {{ s.hit_rate_pct|rate }} · right direction {{ s.up_rate_pct|rate }}
+{% endfor %}
+{% endmacro %}
+{{ r.title|upper }} — US STOCK MARKET — {{ r.run_date.strftime("%A") }} {{ r.run_date.day }} {{ r.run_date.strftime("%B %Y") }}
+Generated {{ r.generated_times|join(" · ") }}
+{% if r.dry_run %}
+DRY RUN — not emailed, not recorded in history.
+{% endif %}
+{% for n in r.session_notes %}
+NOTE: {{ n }}
+{% endfor %}
+
+MARKET OVERVIEW (weekly changes: {{ r.extra.weekly_label }})
+{% for i in r.overview.indices %}
+  {{ "%-18s" % i.name }} {{ "%12s" % (i.level|num) }}  {{ i.weekly_pct|pct(2) }}{% if i.note %}  [{{ i.note }}]{% endif %}
+
+{% endfor %}
+
+Breadth ({{ r.universe_size }} stocks): {{ r.overview.breadth.pct_above_sma50|num(1) }}% above SMA50 · {{ r.overview.breadth.pct_above_sma200|num(1) }}% above SMA200 · week: {% if r.overview.breadth.measured %}{{ r.overview.breadth.advancers }} up / {{ r.overview.breadth.decliners }} down{% else %}unavailable{% endif %}
+
+Sectors (median weekly change):
+{% for s in r.overview.sectors %}
+  {{ "%-28s" % s.sector }} {{ s.median_weekly_pct|pct(2) }}  ({{ s.stocks }})
+{% else %}
+  unavailable
+{% endfor %}
+
+Top gainers: {% for m in r.overview.gainers.to_dict("records") %}{{ m.ticker }} {{ m.weekly_pct|pct }}{% if not loop.last %}, {% endif %}{% else %}unavailable{% endfor %}
+
+Top losers:  {% for m in r.overview.losers.to_dict("records") %}{{ m.ticker }} {{ m.weekly_pct|pct }}{% if not loop.last %}, {% endif %}{% else %}unavailable{% endfor %}
+
+{% if r.performance %}
+
+HOW MONDAY'S PICKS DID
+{% if r.performance.note %}
+{{ r.performance.note }}
+{% endif %}
+{% if r.performance.rows %}
+S&P 500 over the same window: {{ r.performance.benchmark_return_pct|pct(2) }}
+{% for p in r.performance.rows %}
+  {{ "%-4s" % p.list }} {{ "%-7s" % p.ticker }} {{ p.ref_price|num }} -> {{ p.end_price|num }}  {{ p.return_pct|pct(2) }}  {% if p.beat is none %}n/a{% elif p.beat %}beat{% else %}missed{% endif %}
+
+{% endfor %}
+This week:
+{{ stats(r.performance.week_stats) }}
+{% endif %}
+All weeks to date:
+{{ stats(r.performance.cumulative_stats) }}
+{% endif %}
+
+BUY
+{{ picks(r.buy, "No stock passed the BUY filters this time.") }}
+HOLD (strong uptrends, too extended to chase — if you own it, keep it; don't buy more here)
+{{ picks(r.hold, "No stock qualified for HOLD this time.") }}
+SELL
+{{ picks(r.sell, "No stock passed the SELL filters this time.") }}
+{% if r.portfolio is not none %}
+YOUR HOLDINGS
+{% for h in r.portfolio %}
+  {{ "%-7s" % h.ticker }} {{ "%-8s" % h.action }} score {{ h.score|num(1) }} · price {{ h.price|num }}{% if h.pnl is not none %} · P/L {{ h.pnl|num }} ({{ h.pnl_pct|pct }}){% endif %}
+
+    {{ h.note }}
+{% endfor %}
+{% endif %}
+
+ABOUT THIS REPORT
+{% for n in r.data_notes %}
+- {{ n }}
+{% endfor %}
+
+{{ r.disclaimer }}

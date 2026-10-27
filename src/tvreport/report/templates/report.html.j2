@@ -1,0 +1,139 @@
+{% set th = "text-align:left;padding:6px 8px;border-bottom:2px solid #d1d5db;font-size:12px;color:#374151;white-space:nowrap;" %}
+{% set thr = "text-align:right;padding:6px 8px;border-bottom:2px solid #d1d5db;font-size:12px;color:#374151;white-space:nowrap;" %}
+{% set td = "padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;vertical-align:top;" %}
+{% set tdr = "padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;text-align:right;white-space:nowrap;vertical-align:top;" %}
+{% set h2 = "font-size:17px;margin:28px 0 8px;color:#111827;border-bottom:1px solid #e5e7eb;padding-bottom:4px;" %}
+{% set note = "font-size:12px;color:#6b7280;margin:4px 0;" %}
+{% macro picks_table(rows, empty) %}
+{% if rows %}
+<div style="overflow-x:auto;">
+<table role="presentation" cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;">
+<tr><th style="{{ thr }}">#</th><th style="{{ th }}">Ticker</th><th style="{{ th }}">Company / sector</th><th style="{{ thr }}">Price</th><th style="{{ thr }}">Score</th><th style="{{ thr }}">1W</th><th style="{{ thr }}">1M</th></tr>
+{% for p in rows %}
+<tr>
+<td style="{{ tdr }}">{{ p.rank }}</td>
+<td style="{{ td }}"><strong>{{ p.ticker }}</strong></td>
+<td style="{{ td }}">{{ p.description }}<br><span style="color:#6b7280;font-size:12px;">{{ p.sector }}</span></td>
+<td style="{{ tdr }}">{{ p.price|num }}</td>
+<td style="{{ tdr }}"><strong>{{ p.score|num(1) }}</strong></td>
+<td style="{{ tdr }}color:{{ p.weekly_pct|pct_color }};">{{ p.weekly_pct|pct }}</td>
+<td style="{{ tdr }}color:{{ p.perf_1m|pct_color }};">{{ p.perf_1m|pct }}</td>
+</tr>
+<tr><td style="{{ td }}"></td><td colspan="6" style="{{ td }}font-size:12px;color:#374151;">{{ p.rationale }}</td></tr>
+{% endfor %}
+</table>
+</div>
+{% else %}
+<p style="{{ note }}">{{ empty }}</p>
+{% endif %}
+{% endmacro %}
+{% macro stats_table(stats) %}
+<table role="presentation" cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;">
+<tr><th style="{{ th }}">List</th><th style="{{ thr }}">Picks</th><th style="{{ thr }}">Avg return</th><th style="{{ thr }}">Avg vs S&amp;P</th><th style="{{ thr }}">Beat S&amp;P</th><th style="{{ thr }}">Right direction</th></tr>
+{% for s in stats %}
+<tr><td style="{{ td }}">{{ s.list }}</td><td style="{{ tdr }}">{{ s.measured }}/{{ s.picks }}</td>
+<td style="{{ tdr }}color:{{ s.avg_return_pct|pct_color }};">{{ s.avg_return_pct|pct(2) }}</td>
+<td style="{{ tdr }}color:{{ s.avg_excess_pct|pct_color }};">{{ s.avg_excess_pct|pct(2) }}</td>
+<td style="{{ tdr }}">{{ s.hit_rate_pct|rate }}</td><td style="{{ tdr }}">{{ s.up_rate_pct|rate }}</td></tr>
+{% endfor %}
+</table>
+{% endmacro %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ r.subject }}</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;">
+<div style="max-width:720px;margin:0 auto;padding:16px;background:#ffffff;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111827;line-height:1.45;">
+<h1 style="font-size:22px;margin:4px 0 2px;">{{ r.title }}</h1>
+<p style="margin:0;color:#374151;font-size:14px;">US stock market · {{ r.run_date.strftime("%A") }} {{ r.run_date.day }} {{ r.run_date.strftime("%B %Y") }}</p>
+<p style="{{ note }}">Generated {{ r.generated_times|join(" · ") }}</p>
+{% if r.dry_run %}<p style="font-size:13px;color:#92400e;background:#fef3c7;padding:6px 8px;border-radius:4px;">DRY RUN — not emailed, not recorded in history.</p>{% endif %}
+{% for n in r.session_notes %}<p style="font-size:13px;color:#1e3a8a;background:#eff6ff;padding:6px 8px;border-radius:4px;margin:8px 0;">{{ n }}</p>{% endfor %}
+
+<h2 style="{{ h2 }}">Market overview</h2>
+<p style="{{ note }}">Weekly changes: {{ r.extra.weekly_label }}.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;">
+<tr><th style="{{ th }}">Index</th><th style="{{ thr }}">Level</th><th style="{{ thr }}">Week</th></tr>
+{% for i in r.overview.indices %}
+<tr><td style="{{ td }}">{{ i.name }}{% if i.note %}<br><span style="font-size:11px;color:#92400e;">{{ i.note }}</span>{% endif %}</td>
+<td style="{{ tdr }}">{{ i.level|num }}</td>
+<td style="{{ tdr }}color:{{ i.weekly_pct|pct_color }};">{{ i.weekly_pct|pct(2) }}</td></tr>
+{% endfor %}
+</table>
+
+<h3 style="font-size:15px;margin:18px 0 6px;">Breadth ({{ r.universe_size }} stocks)</h3>
+<p style="font-size:13px;margin:2px 0;">Above 50-day SMA: <strong>{{ r.overview.breadth.pct_above_sma50|num(1) }}%</strong> · Above 200-day SMA: <strong>{{ r.overview.breadth.pct_above_sma200|num(1) }}%</strong></p>
+{% if r.overview.breadth.measured == 0 %}<p style="font-size:13px;margin:2px 0;">Week: advancers/decliners unavailable.</p>{% else %}<p style="font-size:13px;margin:2px 0;">Week: <span style="color:#047857;">{{ r.overview.breadth.advancers }} advancers</span> · <span style="color:#b91c1c;">{{ r.overview.breadth.decliners }} decliners</span>{% if r.overview.breadth.unchanged %} · {{ r.overview.breadth.unchanged }} unchanged{% endif %}{% if r.overview.breadth.measured < r.universe_size %} <span style="color:#6b7280;">({{ r.overview.breadth.measured }} with a weekly change)</span>{% endif %}</p>{% endif %}
+
+<h3 style="font-size:15px;margin:18px 0 6px;">Sectors — median weekly change</h3>
+{% if r.overview.sectors %}
+<table role="presentation" cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;">
+{% for s in r.overview.sectors %}
+<tr><td style="{{ td }}">{{ s.sector }} <span style="color:#6b7280;font-size:12px;">({{ s.stocks }})</span></td><td style="{{ tdr }}color:{{ s.median_weekly_pct|pct_color }};">{{ s.median_weekly_pct|pct(2) }}</td></tr>
+{% endfor %}
+</table>
+{% else %}<p style="{{ note }}">Weekly changes are unavailable for this report.</p>{% endif %}
+
+{% for title, movers in [("Top gainers", r.overview.gainers.to_dict("records")), ("Top losers", r.overview.losers.to_dict("records"))] %}
+<h3 style="font-size:15px;margin:18px 0 6px;">{{ title }} of the week</h3>
+{% if movers %}
+<table role="presentation" cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;">
+{% for m in movers %}
+<tr><td style="{{ td }}"><strong>{{ m.ticker }}</strong> <span style="color:#6b7280;font-size:12px;">{{ m.description }}</span></td><td style="{{ tdr }}">{{ m.reference_close|num }}</td><td style="{{ tdr }}color:{{ m.weekly_pct|pct_color }};">{{ m.weekly_pct|pct }}</td></tr>
+{% endfor %}
+</table>
+{% else %}<p style="{{ note }}">Unavailable.</p>{% endif %}
+{% endfor %}
+
+{% if r.performance %}
+<h2 style="{{ h2 }}">How Monday's picks did</h2>
+{% if r.performance.note %}<p style="{{ note }}">{{ r.performance.note }}</p>{% endif %}
+{% if r.performance.rows %}
+<p style="{{ note }}">From the Monday {{ r.performance.monday_run_date.day }} {{ r.performance.monday_run_date.strftime("%b") }} reference close to this report's close. S&amp;P 500 over the same window: <strong>{{ r.performance.benchmark_return_pct|pct(2) }}</strong>.</p>
+<table role="presentation" cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;">
+<tr><th style="{{ th }}">List</th><th style="{{ th }}">Ticker</th><th style="{{ thr }}">Monday</th><th style="{{ thr }}">Now</th><th style="{{ thr }}">Return</th><th style="{{ thr }}">vs S&amp;P</th></tr>
+{% for p in r.performance.rows %}
+<tr><td style="{{ td }}">{{ p.list }}</td><td style="{{ td }}"><strong>{{ p.ticker }}</strong></td><td style="{{ tdr }}">{{ p.ref_price|num }}</td><td style="{{ tdr }}">{{ p.end_price|num }}</td>
+<td style="{{ tdr }}color:{{ p.return_pct|pct_color }};">{{ p.return_pct|pct(2) }}</td>
+<td style="{{ tdr }}">{% if p.beat is none %}n/a{% elif p.beat %}<span style="color:#047857;">beat</span>{% else %}<span style="color:#b91c1c;">missed</span>{% endif %}</td></tr>
+{% endfor %}
+</table>
+<h3 style="font-size:15px;margin:14px 0 6px;">This week</h3>
+{{ stats_table(r.performance.week_stats) }}
+{% endif %}
+<h3 style="font-size:15px;margin:14px 0 6px;">All weeks to date</h3>
+{% if r.performance.cumulative_stats and r.performance.cumulative_stats[0].picks + r.performance.cumulative_stats[1].picks > 0 %}
+{{ stats_table(r.performance.cumulative_stats) }}
+{% else %}<p style="{{ note }}">No completed weeks recorded yet.</p>{% endif %}
+<p style="{{ note }}">BUY "beat" = outperformed the S&amp;P 500; SELL "beat" = underperformed it. "Right direction" = BUY rose / SELL fell.</p>
+{% endif %}
+
+<h2 style="{{ h2 }}">BUY — highest scores passing the buy filters</h2>
+{{ picks_table(r.buy, "No stock passed the BUY filters this time.") }}
+<h2 style="{{ h2 }}">HOLD — strong uptrends, too extended to chase</h2>
+<p style="{{ note }}">If you own it, keep it; don't buy more here.</p>
+{{ picks_table(r.hold, "No stock qualified for HOLD this time.") }}
+<h2 style="{{ h2 }}">SELL — lowest scores passing the sell filters</h2>
+{{ picks_table(r.sell, "No stock passed the SELL filters this time.") }}
+
+{% if r.portfolio is not none %}
+<h2 style="{{ h2 }}">Your holdings</h2>
+<table role="presentation" cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;">
+<tr><th style="{{ th }}">Ticker</th><th style="{{ th }}">Action</th><th style="{{ thr }}">Score</th><th style="{{ thr }}">Price</th><th style="{{ thr }}">P/L</th></tr>
+{% for h in r.portfolio %}
+<tr><td style="{{ td }}"><strong>{{ h.ticker }}</strong></td><td style="{{ td }}"><strong>{{ h.action }}</strong></td><td style="{{ tdr }}">{{ h.score|num(1) }}</td><td style="{{ tdr }}">{{ h.price|num }}</td>
+<td style="{{ tdr }}color:{{ h.pnl_pct|pct_color }};">{% if h.pnl is none %}—{% else %}{{ h.pnl|num }} ({{ h.pnl_pct|pct }}){% endif %}</td></tr>
+<tr><td style="{{ td }}"></td><td colspan="4" style="{{ td }}font-size:12px;color:#374151;">{{ h.note }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<h2 style="{{ h2 }}">About this report</h2>
+{% for n in r.data_notes %}<p style="{{ note }}">{{ n }}</p>{% endfor %}
+<p style="font-size:12px;color:#374151;background:#f9fafb;border:1px solid #e5e7eb;padding:8px;border-radius:4px;margin-top:12px;">{{ r.disclaimer }}</p>
+</div>
+</body>
+</html>

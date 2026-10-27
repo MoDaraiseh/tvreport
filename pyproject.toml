@@ -1,0 +1,61 @@
+[project]
+name = "tvreport"
+version = "0.1.0"
+description = "Twice-weekly rule-based US stock market report built on TradingView scanner data."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tvreport = ["report/templates/*.j2"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PL", "RUF"]
+ignore = [
+    "PLR0913",  # many keyword args are clearer than option objects for small pure functions
+    "PLR2004",  # magic values: thresholds are named in config; test literals are expected values
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+    "RUF001",   # report text deliberately uses typographic characters (—, ·, ×)
+    "RUF002",
+    "RUF003",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"
+files = ["src", "tests", "scripts"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["pandas_market_calendars", "pandas_market_calendars.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-p no:cacheprovider"
+filterwarnings = [
+    "error",
+    # pandas_market_calendars 5.5.0 calls a pandas API that pandas 3 deprecates (not our code)
+    "ignore:Series.dt.weekday is deprecated:DeprecationWarning:pandas_market_calendars",
+]

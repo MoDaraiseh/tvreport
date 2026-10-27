@@ -1,0 +1,26 @@
+# Runtime dependencies, exact versions (resolved with pip freeze in a clean venv, 2026-10-27).
+# Top-level: tradingview-screener, requests, pandas, numpy, pandas_market_calendars, pydantic, PyYAML, Jinja2.
+annotated-types==0.8.0
+certifi==2026.10.23
+charset-normalizer==3.5.2
+exchange_calendars==4.13.2
+idna==3.20
+Jinja2==3.1.6
+korean_lunar_calendar==0.4.0
+MarkupSafe==3.0.4
+numpy==2.5.4
+pandas==3.1.0
+pandas_market_calendars==5.5.0
+pydantic==2.14.1
+pydantic_core==2.50.1
+pyluach==2.3.0
+python-dateutil==3.0.0
+PyYAML==6.0.3
+requests==2.34.2
+six==1.17.0
+toolz==1.2.0
+tradingview-screener==3.2.2
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.5
+urllib3==2.8.0

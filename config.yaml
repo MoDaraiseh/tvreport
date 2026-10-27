@@ -1,0 +1,66 @@
+# tvreport configuration. Validated at startup (see src/tvreport/config.py).
+
+universe:
+  exchanges: [NYSE, NASDAQ, AMEX]
+  min_market_cap: 2.0e9        # USD
+  min_avg_volume_10d: 1.0e6    # shares, 10-day average
+  min_price: 5.0               # USD
+  min_size: 200                # abort if the filtered universe is smaller (filter broken?)
+  max_size: 3000               # ...or larger
+  include_foreign_domiciled: true   # US-listed ordinary shares of non-US companies (not ADRs)
+
+# Verified live 2026-10-27 (scripts/discover_fields.py). FTSE:RUT is the official
+# Russell 2000, but it does not update intraday and can publish its close late;
+# when it doesn't reflect the expected session, the report uses TradingView's
+# real-time calculation TVC:RUT instead and labels it as such.
+indices:
+  - {name: "S&P 500", symbol: "SP:SPX"}
+  - {name: "Nasdaq Composite", symbol: "NASDAQ:IXIC"}
+  - {name: "Nasdaq 100", symbol: "NASDAQ:NDX"}
+  - {name: "Dow Jones", symbol: "DJ:DJI"}
+  - {name: "Russell 2000", symbol: "FTSE:RUT", fallback_symbol: "TVC:RUT"}
+  - {name: "VIX", symbol: "CBOE:VIX"}
+benchmark_symbol: "SP:SPX"
+
+# Composite score weights; must sum to 1.0.
+weights:
+  tv_rating: 0.30
+  trend: 0.25
+  momentum: 0.25
+  volume: 0.10
+  range_52w: 0.10
+
+classify:
+  n_buy: 10
+  n_sell: 10
+  n_hold: 10
+  max_per_sector: 3            # BUY list only
+  buy_min_recommend: 0.1       # Recommend.All >= this
+  buy_max_rsi: 75              # RSI < this
+  sell_max_recommend: -0.1     # Recommend.All <= this
+  extended_rsi: 70             # "extended" if RSI > this ...
+  extended_pct_above_sma50: 15.0   # ... or close is more than this % above SMA50
+  hold_min_score: 60
+
+portfolio:                     # applies only if holdings.yaml exists
+  buy_more_min_score: 65       # score >= 65 -> BUY MORE
+  sell_below_score: 40         # score < 40 -> SELL; otherwise HOLD
+
+schedule:
+  timezone: America/New_York
+  monday: {target: "08:00", earliest: "06:30", latest: "09:25"}
+  friday: {target: "16:45", minutes_after_close: 30, latest: "18:15"}
+
+provider:
+  name: tradingview
+  timeout_seconds: 30
+  max_attempts: 3
+  min_interval_seconds: 1.0
+  backoff_base_seconds: 2.0
+
+data_quality:
+  max_drop_fraction: 0.10
+
+report:
+  top_movers: 10
+  display_timezones: [America/New_York, Asia/Dubai]

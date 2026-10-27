@@ -1,0 +1,10 @@
+# Copy to holdings.yaml (git-ignored) to enable portfolio mode locally, or put
+# this content in the HOLDINGS_YAML repository secret for GitHub Actions.
+#
+# ticker:   bare ("AAPL") or exchange-qualified ("NYSE:BRK.B")
+# shares:   number of shares held (> 0)
+# avg_cost: optional average cost per share in USD; enables unrealized P/L
+holdings:
+  - {ticker: AAPL, shares: 10, avg_cost: 210.50}
+  - {ticker: MSFT, shares: 5}
+  - {ticker: NYSE:JPM, shares: 8, avg_cost: 245.00}

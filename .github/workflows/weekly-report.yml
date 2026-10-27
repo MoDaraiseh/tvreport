@@ -1,0 +1,131 @@
+name: weekly-report
+
+on:
+  schedule:
+    # GitHub cron is UTC and often delayed or dropped, so each window is covered
+    # every 15 minutes in BOTH its EDT and EST equivalents. `tvreport.schedule`
+    # decides in America/New_York whether a trigger is inside the window, and
+    # history.db idempotency makes the extra triggers harmless.
+    #
+    # Monday "Week Ahead", 06:30-09:25 ET
+    #   EDT (UTC-4): 10:30-13:25 UTC     EST (UTC-5): 11:30-14:25 UTC
+    - cron: "30,45 10 * * 1"
+    - cron: "*/15 11-13 * * 1"
+    - cron: "0,15 14 * * 1"
+    # Friday "Week in Review", session close + 30 min (16:30 ET) to 18:15 ET
+    #   EDT: 20:30-22:15 UTC             EST: 21:30-23:15 UTC
+    - cron: "30,45 20 * * 5"
+    - cron: "*/15 21-22 * * 5"
+    - cron: "0,15 23 * * 5"
+  workflow_dispatch:
+    inputs:
+      run_type:
+        description: "monday / friday = build that report now (ignores the time window); auto = behave like a scheduled trigger (for an outside scheduler)"
+        type: choice
+        options: [monday, friday, auto]
+        required: true
+        default: monday
+      dry_run:
+        description: "Dry run: build and save the report only (no email, no history)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # commit data/history.db and reports/
+  actions: write # keep the scheduled workflow enabled (last step)
+
+concurrency:
+  group: weekly-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Check out the branch head *at job start* (not the commit current when the
+      # trigger fired): a trigger queued behind a run that just recorded today's
+      # report must see that history.db, or it would send the report again.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Pre-check (stdlib only)
+        id: pregate
+        if: github.event_name == 'schedule'
+        run: python3 scripts/pregate.py
+
+      - uses: actions/setup-python@v7
+        if: github.event_name != 'schedule' || steps.pregate.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        if: github.event_name != 'schedule' || steps.pregate.outputs.run == 'true'
+        run: |
+          pip install -r requirements.txt
+          pip install --no-deps -e .
+
+      - name: Build and send the report
+        id: report
+        if: github.event_name != 'schedule' || steps.pregate.outputs.run == 'true'
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          REPORT_TO: ${{ secrets.REPORT_TO }}
+          HOLDINGS_YAML: ${{ secrets.HOLDINGS_YAML }}
+        run: |
+          # Optional portfolio mode: holdings come from a secret, never from the repo.
+          if [ -n "$HOLDINGS_YAML" ]; then printf '%s\n' "$HOLDINGS_YAML" > holdings.yaml; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ "${{ inputs.run_type }}" = "auto" ]; then
+              args="--type auto"  # time window + idempotency apply, like a scheduled run
+            else
+              args="--type ${{ inputs.run_type }} --force"
+            fi
+            if [ "${{ inputs.dry_run }}" = "true" ]; then args="$args --dry-run"; fi
+          else
+            args="--type auto"
+          fi
+          python -m tvreport run $args
+
+      - name: Upload report files
+        if: always() && steps.report.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports-${{ github.run_id }}
+          path: reports/*.*
+          if-no-files-found: ignore
+
+      - name: Commit history and reports
+        if: success() && steps.report.outcome == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        run: |
+          git add data/history.db reports/
+          if git diff --cached --quiet; then echo "nothing new to commit"; exit 0; fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "report: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase --quiet origin "${{ github.event.repository.default_branch }}"
+          git push --quiet
+
+      - name: Failure email for errors outside the report step
+        if: failure() && steps.report.outcome != 'failure'
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          REPORT_TO: ${{ secrets.REPORT_TO }}
+        run: python3 scripts/notify_failure.py "workflow step" "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      # GitHub disables scheduled workflows in a public repository after 60 days
+      # without repository activity. Re-enabling through the API on every run is
+      # harmless and keeps the schedule alive either way.
+      - name: Keep schedule enabled
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/weekly-report.yml/enable" || true

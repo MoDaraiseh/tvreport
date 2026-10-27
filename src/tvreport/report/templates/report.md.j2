@@ -1,0 +1,128 @@
+{% macro picks(rows, empty) %}
+{% if rows %}
+| # | Ticker | Company | Sector | Price | Score | 1W | 1M | Rationale |
+|---:|---|---|---|---:|---:|---:|---:|---|
+{% for p in rows %}
+| {{ p.rank }} | **{{ p.ticker }}** | {{ p.description|md }} | {{ p.sector|md }} | {{ p.price|num }} | {{ p.score|num(1) }} | {{ p.weekly_pct|pct }} | {{ p.perf_1m|pct }} | {{ p.rationale|md }} |
+{% endfor %}
+{% else %}
+_{{ empty }}_
+{% endif %}
+{% endmacro %}
+{% macro stats(rows) %}
+| List | Measured | Avg return | Avg vs S&P | Beat S&P | Right direction |
+|---|---:|---:|---:|---:|---:|
+{% for s in rows %}
+| {{ s.list }} | {{ s.measured }}/{{ s.picks }} | {{ s.avg_return_pct|pct(2) }} | {{ s.avg_excess_pct|pct(2) }} | {{ s.hit_rate_pct|rate }} | {{ s.up_rate_pct|rate }} |
+{% endfor %}
+{% endmacro %}
+# {{ r.title }} — {{ r.run_date.strftime("%a") }} {{ r.run_date.day }} {{ r.run_date.strftime("%b %Y") }}
+
+Generated {{ r.generated_times|join(" · ") }}
+{% if r.dry_run %}
+
+> **DRY RUN** — not emailed, not recorded in history.
+{% endif %}
+{% for n in r.session_notes %}
+
+> {{ n }}
+{% endfor %}
+
+## Market overview
+
+Weekly changes: {{ r.extra.weekly_label }}.
+
+| Index | Level | Week |
+|---|---:|---:|
+{% for i in r.overview.indices %}
+| {{ i.name|md }}{% if i.note %} ({{ i.note|md }}){% endif %} | {{ i.level|num }} | {{ i.weekly_pct|pct(2) }} |
+{% endfor %}
+
+**Breadth ({{ r.universe_size }} stocks):** {{ r.overview.breadth.pct_above_sma50|num(1) }}% above SMA50 · {{ r.overview.breadth.pct_above_sma200|num(1) }}% above SMA200 · week: {% if r.overview.breadth.measured %}{{ r.overview.breadth.advancers }} advancers / {{ r.overview.breadth.decliners }} decliners{% else %}unavailable{% endif %}
+
+
+### Sectors — median weekly change
+
+{% if r.overview.sectors %}
+| Sector | Stocks | Median week |
+|---|---:|---:|
+{% for s in r.overview.sectors %}
+| {{ s.sector|md }} | {{ s.stocks }} | {{ s.median_weekly_pct|pct(2) }} |
+{% endfor %}
+{% else %}
+_Weekly changes are unavailable for this report._
+{% endif %}
+
+### Top gainers / losers of the week
+
+{% set g = r.overview.gainers.to_dict("records") %}
+{% set l = r.overview.losers.to_dict("records") %}
+{% if g or l %}
+| Gainer | Week | Loser | Week |
+|---|---:|---|---:|
+{% for k in range([g|length, l|length]|max) %}
+| {{ g[k].ticker if k < g|length else "" }} | {{ g[k].weekly_pct|pct if k < g|length else "" }} | {{ l[k].ticker if k < l|length else "" }} | {{ l[k].weekly_pct|pct if k < l|length else "" }} |
+{% endfor %}
+{% else %}
+_Unavailable._
+{% endif %}
+{% if r.performance %}
+
+## How Monday's picks did
+
+{% if r.performance.note %}
+_{{ r.performance.note }}_
+
+{% endif %}
+{% if r.performance.rows %}
+S&P 500 over the same window: **{{ r.performance.benchmark_return_pct|pct(2) }}**
+
+| List | Ticker | Monday | Now | Return | vs S&P |
+|---|---|---:|---:|---:|---|
+{% for p in r.performance.rows %}
+| {{ p.list }} | {{ p.ticker }} | {{ p.ref_price|num }} | {{ p.end_price|num }} | {{ p.return_pct|pct(2) }} | {% if p.beat is none %}n/a{% elif p.beat %}beat{% else %}missed{% endif %} |
+{% endfor %}
+
+**This week**
+
+{{ stats(r.performance.week_stats) }}
+{% endif %}
+
+**All weeks to date**
+
+{{ stats(r.performance.cumulative_stats) }}
+{% endif %}
+
+## BUY
+
+{{ picks(r.buy, "No stock passed the BUY filters this time.") }}
+
+## HOLD — strong uptrends, too extended to chase
+
+If you own it, keep it; don't buy more here.
+
+{{ picks(r.hold, "No stock qualified for HOLD this time.") }}
+
+## SELL
+
+{{ picks(r.sell, "No stock passed the SELL filters this time.") }}
+{% if r.portfolio is not none %}
+
+## Your holdings
+
+| Ticker | Action | Score | Price | P/L | Note |
+|---|---|---:|---:|---:|---|
+{% for h in r.portfolio %}
+| {{ h.ticker }} | **{{ h.action }}** | {{ h.score|num(1) }} | {{ h.price|num }} | {% if h.pnl is none %}—{% else %}{{ h.pnl|num }} ({{ h.pnl_pct|pct }}){% endif %} | {{ h.note|md }} |
+{% endfor %}
+{% endif %}
+
+## About this report
+
+{% for n in r.data_notes %}
+- {{ n }}
+{% endfor %}
+
+---
+
+_{{ r.disclaimer }}_

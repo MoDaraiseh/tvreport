@@ -1,0 +1,25 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Personal data: holdings are never committed (use the HOLDINGS_YAML secret in Actions)
+holdings.yaml
+.env
+
+# SQLite side files (data/history.db itself IS committed by the workflow)
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
