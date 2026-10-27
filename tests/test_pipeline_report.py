@@ -126,6 +126,7 @@ def test_friday_evaluates_mondays_picks(monday_outcome, universe_raw, indices_ra
     russell = next(i for i in outcome.report.overview.indices if i.name == "Russell 2000")
     assert russell.symbol == "TVC:RUT" and "FTSE:RUT" in (russell.note or "")
     assert outcome.report.subject == "Week in Review — Fri 6 Nov 2026"
+    assert outcome.report.extra["weekly_label"] == "this week, Mon 2 Nov to the Fri 6 Nov close"
     assert outcome.weekly_to_store and "SP:SPX" in outcome.weekly_to_store
 
     record(history, outcome)

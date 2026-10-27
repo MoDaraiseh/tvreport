@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +39,8 @@ class RunOutcome:
 def _weekly_label(ctx: SessionContext, weekly: WeeklyChanges) -> str:
     if ctx.run_type == "friday":
         start = ctx.week_start
-        return f"this week, Mon {start.day} {start:%b} to the {weekly.week_ending} close"
+        end = date.fromisoformat(weekly.week_ending)
+        return f"this week, Mon {start.day} {start:%b} to the {end:%a} {end.day} {end:%b} close"
     end = ctx.last_week_end_session
     base = f"last week, ending {end:%a} {end.day} {end:%b}"
     return {
