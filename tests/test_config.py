@@ -6,8 +6,9 @@ from datetime import date, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
-from scripts.pregate import WINDOWS, decide
+from scripts.already_sent import already_sent
 
+from tests.workflow_gate import run_gate
 from tvreport.config import Config, Weights, load_config
 from tvreport.history import History, RunRecord
 from tvreport.report import md_cell
@@ -54,29 +55,32 @@ def test_rejects_unknown_keys_and_bad_values():
         Config.model_validate({**base, "universe": {**base["universe"], "min_size": 5000}})
 
 
-def test_pregate_skips_already_recorded_run(tmp_path):
-    now = datetime(2026, 11, 2, 8, 0, tzinfo=NY)
+def test_already_sent_reads_history(tmp_path):
     db = tmp_path / "history.db"
-    assert decide(now, db)[0] is True
+    assert already_sent("monday", date(2026, 11, 2), db) is False  # no file yet
     History(db).record_run(
         RunRecord(date(2026, 11, 2), "monday", "x", date(2026, 10, 30), "SP:SPX", 1.0, 1000), []
     )
-    run, reason = decide(now, db)
-    assert run is False and "already recorded" in reason
-    assert decide(datetime(2026, 11, 6, 16, 45, tzinfo=NY), db)[0] is True  # Friday still due
+    assert already_sent("monday", date(2026, 11, 2), db) is True
+    assert already_sent("friday", date(2026, 11, 2), db) is False
+    assert already_sent("monday", date(2026, 11, 9), db) is False
 
 
-def test_pregate_windows_cover_config_windows():
-    """scripts/pregate.py is stdlib-only and hard-codes its windows; it must stay a
-    superset of config.yaml's, or it would silently block real runs."""
+def test_workflow_gate_windows_cover_config_windows():
+    """The workflow's first-step gate hard-codes its windows (it runs before any
+    install); they must stay a superset of config.yaml's or real runs would be
+    silently blocked."""
 
     sched = load_config().schedule
-    _, mon_start, mon_end = WINDOWS[0]
-    assert mon_start <= sched.monday.earliest and mon_end >= sched.monday.latest
-    _, fri_start, fri_end = WINDOWS[4]
-    earliest_close = datetime(2026, 11, 27, 13, 0)  # NYSE early closes are at 13:00 ET
-    earliest_run = (earliest_close + timedelta(minutes=sched.friday.minutes_after_close)).time()
-    assert fri_start <= earliest_run and fri_end >= sched.friday.latest
+    monday = datetime(2026, 11, 2, tzinfo=NY)
+    assert run_gate(datetime.combine(monday, sched.monday.earliest, NY))["run"] == "true"
+    assert run_gate(datetime.combine(monday, sched.monday.latest, NY))["run"] == "true"
+    friday = datetime(2026, 11, 27, tzinfo=NY)  # an early close (13:00 ET)
+    earliest = datetime(2026, 11, 27, 13, 0, tzinfo=NY) + timedelta(
+        minutes=sched.friday.minutes_after_close
+    )
+    assert run_gate(earliest)["run"] == "true"
+    assert run_gate(datetime.combine(friday, sched.friday.latest, NY))["run"] == "true"
 
 
 def test_markdown_cells_are_escaped():

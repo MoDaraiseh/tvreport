@@ -85,7 +85,8 @@ GitHub cron is UTC-only and often delayed or skipped, so [weekly-report.yml](.gi
 | Friday "Week in Review" | Fridays from the session close + 30 min to 18:15 ET. On an early-close day this starts at 13:30. On a holiday it starts at 16:30 and uses the last session's data, labelled as such. |
 
 - **Idempotency:** a report is recorded in `history.db` (one per date and run type) only after its email was sent. Every later trigger that day is skipped, so duplicate crons can never send twice.
-- **Cheap skips:** a standard-library pre-check (`scripts/pregate.py`) lets most triggers exit in seconds without installing anything.
+- **Cheap skips:** the workflow's first step is a standard-library time-window gate that needs no checkout and no install, so a trigger outside a window ends there. Inside a window, `scripts/already_sent.py` checks `history.db` before anything is installed, so the rest of the window's triggers end in seconds once the report is sent.
+- **One run at a time:** the workflow's `concurrency` group queues runs (`queue: max`, up to 100 pending) and never cancels one in progress. Each run checks out the latest commit when it starts, so a queued run sees a report recorded by the run before it.
 - **Verified in the tests:** the cron lines cover every Monday and Friday through the DST changes on 1 Nov 2026 and 14 Mar 2027, including the exact 08:00 and 16:45 targets, and never run a Friday report before close + 30.
 - **Manual runs:** `workflow_dispatch` takes inputs `run_type` (`monday`, `friday`, or `auto`) and `dry_run`. `monday` and `friday` run immediately and ignore the window; `auto` behaves exactly like a scheduled trigger.
 
@@ -93,7 +94,7 @@ GitHub cron is UTC-only and often delayed or skipped, so [weekly-report.yml](.gi
 
 **Keeping the schedule alive:** GitHub's documented rule is that "in a public repository, scheduled workflows are automatically disabled when no repository activity has occurred in 60 days". Its docs don't say whether private repositories are affected, or what counts as activity. This workflow commits `history.db` and the reports twice a week, and its last step re-enables itself through the API on every run (`gh api -X PUT …/enable`). If it was ever disabled anyway, re-enable it under *Actions → weekly-report → Enable workflow*, or with `gh workflow enable weekly-report.yml`.
 
-**Failures** send a short failure email with the error summary (no secrets) and fail the Actions run (exit code 1). A failed run isn't recorded, so the next trigger in the window retries. Failures outside the report step, such as a failed dependency install, are emailed by `scripts/notify_failure.py`.
+**Failures** fail the Actions run (exit code 1) every time and send a short failure email with the error summary (no secrets). You get **at most one failure email per run type per window**: the alert is recorded in `history.db` (committed even after a failure), and later failing triggers in the same window only log. A failed run isn't recorded as sent, so the next trigger in the window still retries the report. Failures outside the report step, such as a failed dependency install, are emailed by `scripts/notify_failure.py` and share the same once-per-window limit.
 
 ## Configuration
 

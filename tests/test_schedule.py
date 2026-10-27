@@ -8,8 +8,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
-from scripts.pregate import decide as pregate_decide
 
+from tests.workflow_gate import run_gate
 from tvreport.schedule import (
     NY,
     RunType,
@@ -159,6 +159,27 @@ def test_crons_cover_every_window_across_dst(cfg, calendar):
             if run_type == "friday":
                 earliest = friday_earliest(current, cfg.schedule, calendar)
                 assert all(s.astimezone(NY) >= earliest for s in accepted)
-            for s in accepted:  # the cheap pre-check must never reject a real run
-                assert pregate_decide(s, Path("does-not-exist.db"))[0], s
+            for s in accepted:  # the workflow's first-step gate must never reject a real run
+                assert run_gate(s) == {"run": "true", "run_type": run_type}, s
         day += timedelta(days=7)
+
+
+def test_workflow_gate_rejects_outside_windows():
+    for when in (
+        "2026-11-02 14:30",
+        "2026-11-02 10:15",
+        "2026-11-04 13:00",
+        "2026-11-06 18:00",  # 13:00 EST, before 13:30
+        "2026-11-06 23:30",
+        "2026-11-07 21:45",
+    ):
+        assert run_gate(utc(when))["run"] == "false", when
+
+
+def test_workflow_gate_manual_runs():
+    wednesday = utc("2026-11-04 15:00")
+    assert run_gate(wednesday, "workflow_dispatch", "friday") == {
+        "run": "true",
+        "run_type": "friday",
+    }
+    assert run_gate(wednesday, "workflow_dispatch", "auto")["run"] == "false"  # auto = gated

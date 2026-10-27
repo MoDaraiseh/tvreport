@@ -3,8 +3,8 @@ name: weekly-report
 on:
   schedule:
     # GitHub cron is UTC and often delayed or dropped, so each window is covered
-    # every 15 minutes in BOTH its EDT and EST equivalents. `tvreport.schedule`
-    # decides in America/New_York whether a trigger is inside the window, and
+    # every 15 minutes in BOTH its EDT and EST equivalents. The gate below and
+    # `tvreport.schedule` decide in America/New_York whether a trigger counts, and
     # history.db idempotency makes the extra triggers harmless.
     #
     # Monday "Week Ahead", 06:30-09:25 ET
@@ -34,42 +34,86 @@ permissions:
   contents: write # commit data/history.db and reports/
   actions: write # keep the scheduled workflow enabled (last step)
 
+# One report run at a time. Runs queue (up to 100 pending) instead of replacing
+# each other, and an in-progress run is never cancelled.
 concurrency:
   group: weekly-report
   cancel-in-progress: false
+  queue: max
 
 jobs:
   report:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      # Check out the branch head *at job start* (not the commit current when the
-      # trigger fired): a trigger queued behind a run that just recorded today's
-      # report must see that history.db, or it would send the report again.
+      # 1. Time-window gate: the very first step, standard library only (the
+      #    runner's python3), no checkout, no install -- skipped triggers end here.
+      #    It is deliberately a superset of the precise gate in tvreport.schedule
+      #    (whose Friday start depends on early closes), which runs again later.
+      - name: Time-window gate
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_RUN_TYPE: ${{ inputs.run_type }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from datetime import datetime, time, timezone
+          from zoneinfo import ZoneInfo
+
+          NY = ZoneInfo("America/New_York")
+          # Broadest windows: Monday 06:30-09:25 ET; Friday 13:30 (early close + 30 min) - 18:15 ET.
+          WINDOWS = {0: ("monday", time(6, 30), time(9, 25)), 4: ("friday", time(13, 30), time(18, 15))}
+          now = datetime.fromisoformat(os.environ["GATE_NOW"]) if os.environ.get("GATE_NOW") else datetime.now(timezone.utc)
+          local = now.astimezone(NY)
+          requested = os.environ.get("INPUT_RUN_TYPE", "")
+          if os.environ.get("EVENT") == "workflow_dispatch" and requested in ("monday", "friday"):
+              run, run_type, reason = True, requested, f"manual {requested} run"
+          else:
+              window = WINDOWS.get(local.weekday())
+              if window and window[1] <= local.time() <= window[2]:
+                  run, run_type, reason = True, window[0], f"inside the {window[0]} window"
+              else:
+                  run, run_type, reason = False, "", "outside the run windows"
+          print(f"{local:%a %Y-%m-%d %H:%M %Z}: {reason}")
+          lines = f"run={'true' if run else 'false'}\nrun_type={run_type}\n"
+          output = os.environ.get("GITHUB_OUTPUT")
+          if output:
+              with open(output, "a", encoding="utf-8") as fh:
+                  fh.write(lines)
+          else:
+              print(lines, end="")
+          PY
+
+      # 2. Check out the branch head *at job start* (not the commit current when the
+      #    trigger fired): a run queued behind one that just recorded today's report
+      #    must see that history.db, or it would send the report again.
       - uses: actions/checkout@v7
+        if: steps.gate.outputs.run == 'true'
         with:
           ref: ${{ github.event.repository.default_branch }}
 
-      - name: Pre-check (stdlib only)
-        id: pregate
-        if: github.event_name == 'schedule'
-        run: python3 scripts/pregate.py
+      # 3. Already sent today? (standard library only, still before any install)
+      - name: Already-sent check
+        id: sent
+        if: steps.gate.outputs.run == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.run_type != 'auto')
+        run: python3 scripts/already_sent.py "${{ steps.gate.outputs.run_type }}"
 
       - uses: actions/setup-python@v7
-        if: github.event_name != 'schedule' || steps.pregate.outputs.run == 'true'
+        if: steps.gate.outputs.run == 'true' && steps.sent.outputs.sent != 'true'
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install
-        if: github.event_name != 'schedule' || steps.pregate.outputs.run == 'true'
+        if: steps.gate.outputs.run == 'true' && steps.sent.outputs.sent != 'true'
         run: |
           pip install -r requirements.txt
           pip install --no-deps -e .
 
       - name: Build and send the report
         id: report
-        if: github.event_name != 'schedule' || steps.pregate.outputs.run == 'true'
+        if: steps.gate.outputs.run == 'true' && steps.sent.outputs.sent != 'true'
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -80,15 +124,13 @@ jobs:
         run: |
           # Optional portfolio mode: holdings come from a secret, never from the repo.
           if [ -n "$HOLDINGS_YAML" ]; then printf '%s\n' "$HOLDINGS_YAML" > holdings.yaml; fi
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ "${{ inputs.run_type }}" = "auto" ]; then
-              args="--type auto"  # time window + idempotency apply, like a scheduled run
-            else
-              args="--type ${{ inputs.run_type }} --force"
-            fi
-            if [ "${{ inputs.dry_run }}" = "true" ]; then args="$args --dry-run"; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_type }}" != "auto" ]; then
+            args="--type ${{ inputs.run_type }} --force"
           else
-            args="--type auto"
+            args="--type auto"  # time window + idempotency apply, like a scheduled run
+          fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            args="$args --dry-run"
           fi
           python -m tvreport run $args
 
@@ -100,10 +142,25 @@ jobs:
           path: reports/*.*
           if-no-files-found: ignore
 
+      # Failures outside the report step (e.g. install): the report step emails its
+      # own failures. Both share one failure email per run type per window.
+      - name: Failure email for errors outside the report step
+        if: failure() && steps.gate.outputs.run == 'true' && steps.report.outcome != 'failure'
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          REPORT_TO: ${{ secrets.REPORT_TO }}
+        run: >-
+          python3 scripts/notify_failure.py "${{ steps.gate.outputs.run_type }}" "workflow step"
+          "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      # Runs after failures too, so a recorded failure alert reaches later triggers.
       - name: Commit history and reports
-        if: success() && steps.report.outcome == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        if: always() && steps.gate.outputs.run == 'true' && steps.sent.outputs.sent != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
         run: |
-          git add data/history.db reports/
+          git add data/history.db reports/ 2>/dev/null || true
           if git diff --cached --quiet; then echo "nothing new to commit"; exit 0; fi
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
@@ -111,21 +168,11 @@ jobs:
           git pull --rebase --quiet origin "${{ github.event.repository.default_branch }}"
           git push --quiet
 
-      - name: Failure email for errors outside the report step
-        if: failure() && steps.report.outcome != 'failure'
-        env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          REPORT_TO: ${{ secrets.REPORT_TO }}
-        run: python3 scripts/notify_failure.py "workflow step" "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
       # GitHub disables scheduled workflows in a public repository after 60 days
-      # without repository activity. Re-enabling through the API on every run is
-      # harmless and keeps the schedule alive either way.
+      # without repository activity. Re-enabling through the API is harmless and
+      # keeps the schedule alive; only done when the gate passed, to keep skips fast.
       - name: Keep schedule enabled
-        if: always()
+        if: always() && steps.gate.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/weekly-report.yml/enable" || true

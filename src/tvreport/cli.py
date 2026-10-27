@@ -6,7 +6,8 @@ Order of operations for a real (non-dry) run:
   2. skip quietly if this date + run type is already in history.db (idempotency);
   3. build the report, save reports/YYYY-MM-DD-<type>.html/.md, email it;
   4. record the run in history.db only after the email was sent.
-Any failure sends a short failure email (no secrets) and exits 1.
+Any failure exits 1 and sends a short failure email (no secrets) -- at most one per
+run type per scheduled window; later failures in the same window only log.
 A dry run builds and saves the report but neither emails nor writes history.
 """
 
@@ -18,7 +19,7 @@ import sys
 import tempfile
 import traceback
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from .config import PROJECT_ROOT, load_config
@@ -147,11 +148,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         log.error("run failed: %s", scrub(f"{type(exc).__name__}: {exc}"))
         log.error("traceback:\n%s", scrub("".join(traceback.format_exception(exc))))
         if settings is not None:
-            try:
-                send(failure_message(settings, label, exc), settings)
-            except Exception as mail_exc:
-                log.error("could not send the failure email either: %s", scrub(str(mail_exc)))
-        return 1
+            _alert_once(
+                history,
+                settings=settings,
+                run_date=run_date,
+                run_type=run_type,
+                label=label,
+                exc=exc,
+            )
+        return 1  # always non-zero, even when the alert was already sent
+
+
+def _alert_once(
+    history: History,
+    *,
+    settings: SmtpSettings,
+    run_date: date,
+    run_type: str,
+    label: str,
+    exc: BaseException,
+) -> None:
+    """At most one failure email per run type per scheduled window (= New York date):
+    later failing triggers in the same window only log. The alert is recorded only
+    after it was actually sent, so a failed send is retried by the next trigger."""
+
+    try:
+        if history.alert_already_sent(run_date, run_type):
+            log.warning(
+                "a failure alert for %s was already sent in this window; not emailing again", label
+            )
+            return
+        send(failure_message(settings, label, exc), settings)
+        history.record_alert(run_date, run_type, _now().isoformat(timespec="seconds"))
+    except Exception as mail_exc:
+        log.error("could not send the failure email: %s", scrub(str(mail_exc), settings=settings))
 
 
 if __name__ == "__main__":

@@ -70,7 +70,17 @@ CREATE TABLE IF NOT EXISTS pick_results (
     beat_benchmark       INTEGER,
     PRIMARY KEY (friday_run_id, list, symbol)
 );
+CREATE TABLE IF NOT EXISTS alerts (
+    run_date    TEXT NOT NULL,
+    run_type    TEXT NOT NULL,
+    sent_at_utc TEXT NOT NULL,
+    PRIMARY KEY (run_date, run_type)
+);
 """
+# One failure email per run type per scheduled window. Each run type has exactly
+# one window per New York date, so (run_date, run_type) identifies the window.
+# scripts/notify_failure.py writes the same table with the same DDL (stdlib only).
+ALERTS_DDL = _SCHEMA[_SCHEMA.index("CREATE TABLE IF NOT EXISTS alerts") :]
 
 
 @dataclass(frozen=True)
@@ -265,6 +275,21 @@ class History:
             )
             for r in rows
         ]
+
+    def alert_already_sent(self, run_date: date, run_type: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM alerts WHERE run_date = ? AND run_type = ?",
+                (run_date.isoformat(), run_type),
+            ).fetchone()
+        return row is not None
+
+    def record_alert(self, run_date: date, run_type: str, sent_at_utc: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO alerts VALUES (?, ?, ?)",
+                (run_date.isoformat(), run_type, sent_at_utc),
+            )
 
     def stored_weekly(self, week_ending: date, kind: str) -> dict[str, float]:
         with self._connect() as conn:

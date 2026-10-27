@@ -120,3 +120,31 @@ def test_missing_smtp_settings_fails_before_fetching(harness, monkeypatch):
     monkeypatch.delenv("SMTP_PASSWORD")
     assert harness["run"]("--type", "auto") == 1
     assert harness["provider_calls"] == 0
+
+
+def test_failure_email_at_most_once_per_window(harness):
+    harness["provider"] = FakeProvider(None, None, error=ProviderError("HTTP 503"))  # type: ignore[arg-type]
+    assert harness["run"]("--type", "auto") == 1
+    harness["now"] = datetime(2026, 11, 2, 8, 15, tzinfo=NY)  # next trigger, same window
+    assert harness["run"]("--type", "auto") == 1  # still fails loudly ...
+    harness["now"] = datetime(2026, 11, 2, 8, 30, tzinfo=NY)
+    assert harness["run"]("--type", "auto") == 1
+    assert len(harness["sent"]) == 1  # ... but only one email
+    assert History(harness["db"]).alert_already_sent(date(2026, 11, 2), "monday")
+
+    harness["now"] = datetime(2026, 11, 6, 16, 45, tzinfo=NY)  # Friday window: new alert
+    assert harness["run"]("--type", "auto") == 1
+    assert len(harness["sent"]) == 2
+    harness["now"] = datetime(2026, 11, 9, 8, 0, tzinfo=NY)  # next Monday: new window
+    assert harness["run"]("--type", "auto") == 1
+    assert len(harness["sent"]) == 3
+
+
+def test_failed_alert_send_is_not_recorded(harness, monkeypatch):
+    def broken_send(msg, settings):
+        raise RuntimeError("smtp down")
+
+    monkeypatch.setattr(cli, "send", broken_send)
+    harness["provider"] = FakeProvider(None, None, error=ProviderError("HTTP 503"))  # type: ignore[arg-type]
+    assert harness["run"]("--type", "auto") == 1
+    assert not History(harness["db"]).alert_already_sent(date(2026, 11, 2), "monday")
