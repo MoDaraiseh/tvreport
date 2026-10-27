@@ -13,7 +13,7 @@ import pytest
 from tests.conftest import FakeProvider, retime, stock_row
 from tvreport.history import History
 from tvreport.notify import build_message, failure_message, scrub, send, smtp_settings
-from tvreport.pipeline import build_report
+from tvreport.pipeline import build_report, record_outcome
 from tvreport.report import render_html, render_markdown, render_text, save_report
 from tvreport.schedule import NY
 
@@ -38,14 +38,7 @@ def monday_data(
 
 
 def record(history: History, outcome) -> None:
-    history.record_run(
-        outcome.run_record,
-        outcome.picks,
-        weekly=outcome.weekly_to_store or None,
-        week_ending=outcome.run_record.data_session if outcome.weekly_to_store else None,
-        results=outcome.pick_results,
-        monday_run_id=outcome.monday_run.id if outcome.monday_run else None,
-    )
+    record_outcome(history, outcome)
 
 
 @pytest.fixture

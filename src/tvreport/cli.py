@@ -32,7 +32,7 @@ from .notify import (
     send,
     smtp_settings,
 )
-from .pipeline import build_report
+from .pipeline import build_report, record_outcome
 from .providers import make_provider
 from .report import render_html, render_text, save_report
 from .schedule import NY, MarketCalendar, gate, resolve_run_type
@@ -134,14 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             build_message(settings, report.subject, render_text(report), render_html(report)),
             settings,
         )
-        history.record_run(
-            outcome.run_record,
-            outcome.picks,
-            weekly=outcome.weekly_to_store or None,
-            week_ending=outcome.run_record.data_session if outcome.weekly_to_store else None,
-            results=outcome.pick_results,
-            monday_run_id=outcome.monday_run.id if outcome.monday_run else None,
-        )
+        record_outcome(history, outcome)
         log.info("recorded %s in %s", label, args.db)
         return 0
     except Exception as exc:

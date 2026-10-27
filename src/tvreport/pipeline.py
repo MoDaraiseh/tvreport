@@ -289,3 +289,16 @@ def build_report(
     )
     picks = _pick_records("BUY", buy) + _pick_records("SELL", sell) + _pick_records("HOLD", hold)
     return RunOutcome(report, record, picks, weekly_to_store, results, monday_run)
+
+
+def record_outcome(history: History, outcome: RunOutcome) -> int:
+    """Store a built report's run, picks, weekly changes and pick results."""
+
+    return history.record_run(
+        outcome.run_record,
+        outcome.picks,
+        weekly=outcome.weekly_to_store or None,
+        week_ending=outcome.run_record.data_session if outcome.weekly_to_store else None,
+        results=outcome.pick_results,
+        monday_run_id=outcome.monday_run.id if outcome.monday_run else None,
+    )
