@@ -69,9 +69,9 @@ Credentials are never logged or printed, and secret values are scrubbed from err
 
 ## GitHub Actions
 
-1. **Create the repository** (a private one is recommended) and push this code.
+1. **Fork this repository** (or push a copy of it to your own). The workflow commits the saved reports and `data/history.db` back to the repository, so in a public repository they are public too; use a private one if that matters to you.
 2. **Add secrets.** Go to *Settings → Secrets and variables → Actions → New repository secret* and add `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` and `REPORT_TO`.
-   - Optional: `HOLDINGS_YAML`, containing the same YAML as [holdings.example.yaml](holdings.example.yaml), enables portfolio mode without committing your holdings.
+   - Optional: `HOLDINGS_YAML`, containing the same YAML as [holdings.example.yaml](holdings.example.yaml), enables portfolio mode without committing your holdings file. **The saved reports do include a "Your holdings" table (tickers, prices and P/L), and the workflow commits them**, so only set this secret on a private repository.
 3. **Allow the workflow to push** `history.db` and the reports: *Settings → Actions → General → Workflow permissions → Read and write*.
 4. **Test it.** *Actions → weekly-report → Run workflow* with `run_type = monday` and `dry_run = true` builds a report and attaches it to the run as an artifact. Run it once with `dry_run = false` to receive a real email.
 
@@ -117,8 +117,12 @@ Everything tunable is in [config.yaml](config.yaml) and validated at startup:
 
 ## Holdings (portfolio mode)
 
-Copy [holdings.example.yaml](holdings.example.yaml) to `holdings.yaml` (git-ignored), or store its content in the `HOLDINGS_YAML` secret. Each holding gets BUY MORE (score ≥ 65), HOLD (40–65) or SELL (< 40), plus unrealized P/L if you give `avg_cost`. Holdings outside the screened universe are fetched and scored too.
+Copy [holdings.example.yaml](holdings.example.yaml) to `holdings.yaml` (git-ignored), or store its content in the `HOLDINGS_YAML` secret (private repositories only: see [GitHub Actions](#github-actions)). Each holding gets BUY MORE (score ≥ 65), HOLD (40–65) or SELL (< 40), plus unrealized P/L if you give `avg_cost`. Holdings outside the screened universe are fetched and scored too.
 
 ## Known limitations
 
 See [METHODOLOGY.md](METHODOLOGY.md#known-limitations). The main ones: the data is 15-minute delayed, `Perf.W` is unreliable so weekly changes are computed from weekly bars instead, the official Russell 2000 (`FTSE:RUT`) can publish late (a labelled fallback is used), and the Monday pre-market bar behaviour is handled both ways but was not yet observed live.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
