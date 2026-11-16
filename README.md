@@ -5,6 +5,8 @@ Builds a rule-based US stock market report from TradingView scanner data twice a
 - **Monday, pre-market ("Week Ahead")** at 08:00 ET: market overview, then BUY / HOLD / SELL lists.
 - **Friday, after the close ("Week in Review")** at 16:45 ET: market overview, how Monday's picks did against the S&P 500, then updated BUY / HOLD / SELL lists.
 
+**[See a sample report](https://htmlpreview.github.io/?https://github.com/MoDaraiseh/tvreport/blob/main/docs/sample-report.html)** ([HTML source](docs/sample-report.html)). It is built from the recorded test fixtures, not live data, and is labelled as a sample.
+
 Each report is emailed (HTML with a plain-text alternative) and saved as `reports/YYYY-MM-DD-{monday|friday}.html` and `.md`. Every pick and its reference price is stored in `data/history.db`. The scoring is deterministic and documented formula by formula in [METHODOLOGY.md](METHODOLOGY.md). It is an automated technical screen, **not financial advice**.
 
 ## How it works
