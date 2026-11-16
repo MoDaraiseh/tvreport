@@ -1,5 +1,7 @@
 # tvreport — US stock market report, Monday and Friday
 
+[![ci](https://github.com/MoDaraiseh/tvreport/actions/workflows/ci.yml/badge.svg)](https://github.com/MoDaraiseh/tvreport/actions/workflows/ci.yml)
+
 Builds a rule-based US stock market report from TradingView scanner data twice a week, emails it to you, and saves it in this repo:
 
 - **Monday, pre-market ("Week Ahead")** at 08:00 ET: market overview, then BUY / HOLD / SELL lists.
@@ -8,6 +10,8 @@ Builds a rule-based US stock market report from TradingView scanner data twice a
 **[See a sample report](https://htmlpreview.github.io/?https://github.com/MoDaraiseh/tvreport/blob/main/docs/sample-report.html)** ([HTML source](docs/sample-report.html)). It is built from the recorded test fixtures, not live data, and is labelled as a sample.
 
 Each report is emailed (HTML with a plain-text alternative) and saved as `reports/YYYY-MM-DD-{monday|friday}.html` and `.md`. Every pick and its reference price is stored in `data/history.db`. The scoring is deterministic and documented formula by formula in [METHODOLOGY.md](METHODOLOGY.md). It is an automated technical screen, **not financial advice**.
+
+**Status (16 Nov 2026):** no scheduled report has been sent from this repository yet, so `reports/` is still empty. GitHub delivered every scheduled trigger after its window had closed (see [Schedule](#schedule-timezone-critical)), and the repository's SMTP secrets are not set.
 
 ## How it works
 
@@ -27,12 +31,25 @@ TradingView scanner (via tradingview-screener) ─► DataProvider ─► data-q
 
 Requires Python 3.11+.
 
+macOS / Linux:
+
 ```bash
-python -m venv .venv
-.venv\Scripts\activate            # Windows; on macOS/Linux: source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements-dev.txt
 pip install --no-deps -e .
 ```
+
+Windows (PowerShell):
+
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements-dev.txt
+pip install --no-deps -e .
+```
+
+Once the virtual environment is active, `python` is the same command on every platform, so the commands below work as written.
 
 ## Running locally
 
@@ -50,6 +67,7 @@ Other tools:
 ```bash
 python scripts/discover_fields.py     # live check of every field/unit/index symbol; refreshes tests/fixtures/
 python scripts/check_session_bars.py  # which session TradingView's daily/weekly bars belong to right now
+python -m scripts.make_sample_report  # rebuild docs/sample-report.html from the recorded fixtures (offline)
 pytest                                # offline tests; all network access is mocked with recorded data
 ruff check . && ruff format --check . && mypy
 ```
