@@ -290,3 +290,8 @@ def test_workflow_missed_window_fails_and_alerts_once():
     assert "steps.gate.outputs.missed != ''" in steps["Commit history and reports"]
     # the already-sent check runs for a missed trigger, so a sent report stays green
     assert "steps.gate.outputs.missed != ''" in steps["Already-sent check"]
+
+
+def test_workflow_keeps_schedule_enabled_on_every_trigger():
+    assert _step_conditions()["Keep schedule enabled"] == "always()"
+    assert "actions: write" in WORKFLOW.read_text(encoding="utf-8")

@@ -205,9 +205,11 @@ jobs:
 
       # GitHub disables scheduled workflows in a public repository after 60 days
       # without repository activity. Re-enabling through the API is harmless and
-      # keeps the schedule alive; only done when the gate passed, to keep skips fast.
+      # cheap (one API call, no checkout), so it runs on every trigger, including
+      # the ones outside a window: a schedule that never lands in a window must
+      # stay alive too. `actions: write` above covers this call.
       - name: Keep schedule enabled
-        if: always() && steps.gate.outputs.run == 'true'
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/weekly-report.yml/enable" || true
