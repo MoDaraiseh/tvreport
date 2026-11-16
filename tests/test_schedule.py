@@ -160,7 +160,7 @@ def test_crons_cover_every_window_across_dst(cfg, calendar):
                 earliest = friday_earliest(current, cfg.schedule, calendar)
                 assert all(s.astimezone(NY) >= earliest for s in accepted)
             for s in accepted:  # the workflow's first-step gate must never reject a real run
-                assert run_gate(s) == {"run": "true", "run_type": run_type}, s
+                assert run_gate(s) == {"run": "true", "run_type": run_type, "missed": ""}, s
         day += timedelta(days=7)
 
 
@@ -181,6 +181,7 @@ def test_workflow_gate_manual_runs():
     assert run_gate(wednesday, "workflow_dispatch", "friday") == {
         "run": "true",
         "run_type": "friday",
+        "missed": "",
     }
     assert run_gate(wednesday, "workflow_dispatch", "auto")["run"] == "false"  # auto = gated
 
@@ -190,6 +191,7 @@ def test_workflow_test_email_option():
     assert run_gate(wednesday, "workflow_dispatch", "test_email") == {
         "run": "true",
         "run_type": "test_email",
+        "missed": "",
     }
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "python -m tvreport test-email" in text
@@ -206,3 +208,85 @@ def test_workflow_test_email_option():
         "inputs.run_type != 'test_email'"
         in steps["Failure email for errors outside the report step"]
     )
+
+
+# ------------------------------------------------------------------ missed windows
+# The 15 scheduled runs GitHub created between 30 Oct and 14 Nov 2026, all after
+# their window had closed (created_at, UTC). Each one used to end green.
+LATE_TRIGGERS = [
+    ("2026-10-30 23:57", "friday"),  # Fri 19:57 EDT
+    ("2026-10-31 00:24", "friday"),
+    ("2026-10-31 02:02", "friday"),
+    ("2026-11-02 20:25", "monday"),  # Mon 15:25 EST
+    ("2026-11-02 20:38", "monday"),
+    ("2026-11-02 22:38", "monday"),
+    ("2026-11-07 00:13", "friday"),  # Fri 19:13 EST
+    ("2026-11-07 00:38", "friday"),
+    ("2026-11-07 02:33", "friday"),
+    ("2026-11-09 20:52", "monday"),
+    ("2026-11-09 21:18", "monday"),
+    ("2026-11-09 23:18", "monday"),
+    ("2026-11-14 00:58", "friday"),
+    ("2026-11-14 01:17", "friday"),
+    ("2026-11-14 02:54", "friday"),
+]
+
+
+@pytest.mark.parametrize(("when", "run_type"), LATE_TRIGGERS)
+def test_workflow_gate_flags_late_scheduled_trigger(when, run_type):
+    assert run_gate(utc(when)) == {"run": "false", "run_type": "", "missed": run_type}
+
+
+def test_workflow_gate_missed_only_after_the_window_on_the_same_day():
+    for when in (
+        "2026-11-02 11:15",  # Monday 06:15 EST: before the window
+        "2026-11-06 18:00",  # Friday 13:00 EST: before the earliest start
+        "2026-11-04 23:00",  # Wednesday
+        "2026-11-07 12:00",  # Saturday morning in New York
+    ):
+        assert run_gate(utc(when))["missed"] == "", when
+    assert run_gate(utc("2026-11-02 14:26"))["missed"] == "monday"  # 09:26 EST
+    assert run_gate(utc("2026-11-06 23:16"))["missed"] == "friday"  # 18:16 EST
+
+
+def test_workflow_gate_missed_for_dispatch():
+    late_monday = utc("2026-11-09 20:52")
+    # an outside scheduler's `auto` call that would send email counts as missed
+    assert run_gate(late_monday, "workflow_dispatch", "auto", "false")["missed"] == "monday"
+    # a dry run never does
+    assert run_gate(late_monday, "workflow_dispatch", "auto", "true")["missed"] == ""
+    # a manual monday/friday run ignores the window entirely
+    assert run_gate(late_monday, "workflow_dispatch", "monday", "false") == {
+        "run": "true",
+        "run_type": "monday",
+        "missed": "",
+    }
+
+
+def _step_conditions() -> dict[str, str]:
+    steps: dict[str, str] = {}
+    current = None
+    for line in WORKFLOW.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- name:"):
+            current = stripped.split("- name:", 1)[1].strip()
+        elif stripped.startswith("- "):  # an unnamed step, e.g. `- uses: ...`
+            current = None
+        elif current and stripped.startswith("if:") and current not in steps:
+            steps[current] = stripped.split("if:", 1)[1].strip()
+    return steps
+
+
+def test_workflow_missed_window_fails_and_alerts_once():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    steps = _step_conditions()
+    assert steps["Missed window"] == (
+        "steps.gate.outputs.missed != '' && steps.sent.outputs.sent != 'true'"
+    )
+    block = text.split("- name: Missed window", 1)[1].split("\n      - ", 1)[0]
+    assert "scripts/notify_failure.py" in block  # the shared once-per-window alert
+    assert block.rstrip().endswith("exit 1")  # always fails, even if the email can't send
+    # the alert record is committed, so later late triggers in the window don't re-email
+    assert "steps.gate.outputs.missed != ''" in steps["Commit history and reports"]
+    # the already-sent check runs for a missed trigger, so a sent report stays green
+    assert "steps.gate.outputs.missed != ''" in steps["Already-sent check"]

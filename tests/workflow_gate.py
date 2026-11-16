@@ -29,11 +29,19 @@ def _compiled() -> CodeType:
     return compile(gate_source(), "weekly-report.yml:gate", "exec")
 
 
-def run_gate(now: datetime, event: str = "schedule", run_type: str = "") -> dict[str, str]:
+def run_gate(
+    now: datetime, event: str = "schedule", run_type: str = "", dry_run: str = ""
+) -> dict[str, str]:
     """Execute the gate for `now`; returns its outputs, e.g.
-    {'run': 'true', 'run_type': 'monday'}."""
+    {'run': 'true', 'run_type': 'monday', 'missed': ''}. `dry_run` is the
+    workflow_dispatch input as Actions renders it: 'true', 'false' or ''."""
 
-    env = {"GATE_NOW": now.isoformat(), "EVENT": event, "INPUT_RUN_TYPE": run_type}
+    env = {
+        "GATE_NOW": now.isoformat(),
+        "EVENT": event,
+        "INPUT_RUN_TYPE": run_type,
+        "INPUT_DRY_RUN": dry_run,
+    }
     saved = {k: os.environ.get(k) for k in [*env, "GITHUB_OUTPUT"]}
     os.environ.update(env)
     os.environ.pop("GITHUB_OUTPUT", None)

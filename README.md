@@ -98,7 +98,33 @@ GitHub cron is UTC-only and often delayed or skipped, so [weekly-report.yml](.gi
 - **Verified in the tests:** the cron lines cover every Monday and Friday through the DST changes on 1 Nov 2026 and 14 Mar 2027, including the exact 08:00 and 16:45 targets, and never run a Friday report before close + 30.
 - **Manual runs:** `workflow_dispatch` takes inputs `run_type` (`monday`, `friday`, or `auto`) and `dry_run`. `monday` and `friday` run immediately and ignore the window; `auto` behaves exactly like a scheduled trigger.
 
-**Missed runs:** GitHub can delay scheduled runs by many minutes and drops some entirely on quiet repos. With 15-minute triggers across a ~2-hour window, a whole window being skipped is unlikely but possible. For extra reliability, have an outside scheduler (for example a free cron service) call the `workflow_dispatch` API every 15 minutes during the windows, with `run_type=auto` and `dry_run=false`. Use a fine-grained token limited to this repository's Actions. The window and idempotency checks make the extra calls harmless.
+**Missed runs:** GitHub can delay scheduled runs by hours and drops some entirely. On this repository, every scheduled run from 30 Oct to 14 Nov 2026 (15 runs) was created between about 1 and 9 hours after its window had closed, so none of them could build a report. A trigger that arrives on a Monday or Friday after that day's window has closed, when no report was sent that day, now **fails the run** and sends the once-per-window failure email (if SMTP is configured). It no longer ends as a silent green run. The reliable fix is an outside scheduler: see [External trigger](#external-trigger).
+
+### External trigger
+
+An outside cron service calls the `workflow_dispatch` API every 15 minutes during each window, with `run_type=auto`. Each call behaves exactly like a scheduled trigger, so the window and "already sent" checks make the extra calls harmless.
+
+1. **Create a token.** *GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token.*
+   - Repository access: *Only select repositories* → this repository.
+   - Repository permissions: **Actions: Read and write**. Leave everything else at *No access*.
+   - Set an expiry date and note it; the trigger stops when the token expires.
+2. **Create the job** in a cron service that can send a POST request with headers and a body (for example cron-job.org). Set the job's time zone to `America/New_York`, so DST needs no second schedule.
+   - Schedule: Mondays 06:30–09:15 and Fridays 16:30–18:15, every 15 minutes.
+   - Method and URL: `POST https://api.github.com/repos/<owner>/<repo>/actions/workflows/weekly-report.yml/dispatches`
+   - Headers: `Accept: application/vnd.github+json`, `Authorization: Bearer <token>`, `X-GitHub-Api-Version: 2022-11-28`
+   - Body: `{"ref": "main", "inputs": {"run_type": "auto", "dry_run": "false"}}`
+3. **Check it.** A successful call returns `204 No Content` and a new `workflow_dispatch` run appears under *Actions → weekly-report*. The same call from a shell:
+
+```bash
+curl -X POST \
+  -H "Accept: application/vnd.github+json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  https://api.github.com/repos/<owner>/<repo>/actions/workflows/weekly-report.yml/dispatches \
+  -d '{"ref": "main", "inputs": {"run_type": "auto", "dry_run": "false"}}'
+```
+
+Outside a window, such a call ends at the time-window gate. A call made after the window has closed, on a day with no report, fails the run like a late scheduled trigger.
 
 **Keeping the schedule alive:** GitHub's documented rule is that "in a public repository, scheduled workflows are automatically disabled when no repository activity has occurred in 60 days". Its docs don't say whether private repositories are affected, or what counts as activity. This workflow commits `history.db` and the reports twice a week, and its last step re-enables itself through the API on every run (`gh api -X PUT …/enable`). If it was ever disabled anyway, re-enable it under *Actions → weekly-report → Enable workflow*, or with `gh workflow enable weekly-report.yml`.
 

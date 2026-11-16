@@ -50,11 +50,15 @@ jobs:
       #    runner's python3), no checkout, no install -- skipped triggers end here.
       #    It is deliberately a superset of the precise gate in tvreport.schedule
       #    (whose Friday start depends on early closes), which runs again later.
+      #    A trigger that arrives on a Monday or Friday after that day's window has
+      #    closed sets `missed`; unless today's report was already sent, the job
+      #    then emails a failure alert and fails, instead of ending green.
       - name: Time-window gate
         id: gate
         env:
           EVENT: ${{ github.event_name }}
           INPUT_RUN_TYPE: ${{ inputs.run_type }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           python3 - <<'PY'
           import os
@@ -67,16 +71,24 @@ jobs:
           now = datetime.fromisoformat(os.environ["GATE_NOW"]) if os.environ.get("GATE_NOW") else datetime.now(timezone.utc)
           local = now.astimezone(NY)
           requested = os.environ.get("INPUT_RUN_TYPE", "")
-          if os.environ.get("EVENT") == "workflow_dispatch" and requested in ("monday", "friday", "test_email"):
+          event = os.environ.get("EVENT")
+          missed = ""
+          if event == "workflow_dispatch" and requested in ("monday", "friday", "test_email"):
               run, run_type, reason = True, requested, f"manual {requested} run"
           else:
               window = WINDOWS.get(local.weekday())
               if window and window[1] <= local.time() <= window[2]:
                   run, run_type, reason = True, window[0], f"inside the {window[0]} window"
+              elif window and local.time() > window[2]:
+                  run, run_type = False, ""
+                  reason = f"after the {window[0]} window closed at {window[2]:%H:%M} ET"
+                  # Scheduled triggers, and `auto` dispatches that would send email, only.
+                  if event == "schedule" or os.environ.get("INPUT_DRY_RUN") == "false":
+                      missed = window[0]
               else:
                   run, run_type, reason = False, "", "outside the run windows"
           print(f"{local:%a %Y-%m-%d %H:%M %Z}: {reason}")
-          lines = f"run={'true' if run else 'false'}\nrun_type={run_type}\n"
+          lines = f"run={'true' if run else 'false'}\nrun_type={run_type}\nmissed={missed}\n"
           output = os.environ.get("GITHUB_OUTPUT")
           if output:
               with open(output, "a", encoding="utf-8") as fh:
@@ -89,15 +101,33 @@ jobs:
       #    trigger fired): a run queued behind one that just recorded today's report
       #    must see that history.db, or it would send the report again.
       - uses: actions/checkout@v7
-        if: steps.gate.outputs.run == 'true'
+        if: steps.gate.outputs.run == 'true' || steps.gate.outputs.missed != ''
         with:
           ref: ${{ github.event.repository.default_branch }}
 
       # 3. Already sent today? (standard library only, still before any install)
       - name: Already-sent check
         id: sent
-        if: steps.gate.outputs.run == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.run_type != 'auto')
-        run: python3 scripts/already_sent.py "${{ steps.gate.outputs.run_type }}"
+        if: (steps.gate.outputs.run == 'true' || steps.gate.outputs.missed != '') && !(github.event_name == 'workflow_dispatch' && inputs.run_type != 'auto')
+        run: python3 scripts/already_sent.py "${{ steps.gate.outputs.run_type || steps.gate.outputs.missed }}"
+
+      # A trigger after today's window closed, and no report sent today: GitHub
+      # delivered the scheduled run too late. Email the once-per-window failure
+      # alert (recorded in history.db, committed below), then fail the job.
+      - name: Missed window
+        if: steps.gate.outputs.missed != '' && steps.sent.outputs.sent != 'true'
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          REPORT_TO: ${{ secrets.REPORT_TO }}
+        run: |
+          python3 scripts/notify_failure.py "${{ steps.gate.outputs.missed }}" \
+            "missed window: the trigger arrived after the window had closed" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
+          echo "::error::Today's ${{ steps.gate.outputs.missed }} report was not sent and its window has closed."
+          exit 1
 
       - uses: actions/setup-python@v7
         if: steps.gate.outputs.run == 'true' && steps.sent.outputs.sent != 'true'
@@ -163,7 +193,7 @@ jobs:
 
       # Runs after failures too, so a recorded failure alert reaches later triggers.
       - name: Commit history and reports
-        if: always() && steps.gate.outputs.run == 'true' && steps.sent.outputs.sent != 'true' && !(github.event_name == 'workflow_dispatch' && (inputs.dry_run || inputs.run_type == 'test_email'))
+        if: always() && (steps.gate.outputs.run == 'true' || steps.gate.outputs.missed != '') && steps.sent.outputs.sent != 'true' && !(github.event_name == 'workflow_dispatch' && (inputs.dry_run || inputs.run_type == 'test_email'))
         run: |
           git add data/history.db reports/ 2>/dev/null || true
           if git diff --cached --quiet; then echo "nothing new to commit"; exit 0; fi
