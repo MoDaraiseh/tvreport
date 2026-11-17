@@ -19,7 +19,14 @@ from .portfolio import evaluate_portfolio, load_holdings
 from .providers import DataProvider
 from .quality import QualityReport, validate_universe
 from .report import PerformanceSection, ReportData
-from .schedule import MarketCalendar, RunType, SessionContext, session_context
+from .schedule import (
+    NY,
+    REGULAR_OPEN,
+    MarketCalendar,
+    RunType,
+    SessionContext,
+    session_context,
+)
 from .scoring import SUBSCORES, rationale, score_frame
 from .weekly import WeeklyChanges, weekly_changes
 
@@ -122,7 +129,11 @@ def build_report(
     dry_run: bool,
     holdings_path: Path | None = None,
     calendar: MarketCalendar | None = None,
+    delayed: bool = False,
 ) -> RunOutcome:
+    """Build one report. `delayed`: the trigger came after the window, inside the
+    catch-up period; the report is marked [DELAYED] and says when it was built."""
+
     cal = calendar or MarketCalendar()
     ctx = session_context(run_type, now, cal)
     log.info(
@@ -266,6 +277,7 @@ def build_report(
         portfolio=portfolio_rows,
         performance=performance,
         dry_run=dry_run,
+        delayed_note=_delayed_note(run_type, now, cfg, ctx) if delayed else None,
         extra={"weekly_label": _weekly_label(ctx, universe_weekly)},
     )
 
@@ -287,9 +299,29 @@ def build_report(
         benchmark_symbol=cfg.benchmark_symbol,
         benchmark_ref=benchmark_level,
         universe_size=quality.kept_rows,
+        delayed=delayed,
     )
     picks = _pick_records("BUY", buy) + _pick_records("SELL", sell) + _pick_records("HOLD", hold)
     return RunOutcome(report, record, picks, weekly_to_store, results, monday_run)
+
+
+def _delayed_note(run_type: RunType, now: datetime, cfg: Config, ctx: SessionContext) -> str:
+    local = now.astimezone(NY)
+    if run_type == "monday":
+        win = cfg.schedule.monday
+        window = f"Monday window ({win.earliest:%H:%M}-{win.latest:%H:%M} ET)"
+    else:
+        window = f"Friday window (until {cfg.schedule.friday.latest:%H:%M} ET)"
+    note = (
+        f"DELAYED — built at {local:%H:%M} ET, after the usual {window} had closed, "
+        "because the run started late."
+    )
+    if run_type == "monday" and ctx.market_open_today and local.time() >= REGULAR_OPEN:
+        note += (
+            " The market was already open: prices and index levels are still the previous "
+            "session's closes, but ratings, indicators and scores use live intraday values."
+        )
+    return note
 
 
 def record_outcome(history: History, outcome: RunOutcome) -> int:

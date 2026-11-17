@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS runs (
     benchmark_symbol TEXT NOT NULL,
     benchmark_ref    REAL,
     universe_size    INTEGER NOT NULL,
+    delayed          INTEGER NOT NULL DEFAULT 0,
     UNIQUE (run_date, run_type)
 );
 CREATE TABLE IF NOT EXISTS picks (
@@ -76,11 +77,23 @@ CREATE TABLE IF NOT EXISTS alerts (
     sent_at_utc TEXT NOT NULL,
     PRIMARY KEY (run_date, run_type)
 );
+CREATE TABLE IF NOT EXISTS missed_windows (
+    run_date     TEXT NOT NULL,
+    run_type     TEXT NOT NULL,
+    noted_at_utc TEXT NOT NULL,
+    PRIMARY KEY (run_date, run_type)
+);
 """
 # One failure email per run type per scheduled window. Each run type has exactly
 # one window per New York date, so (run_date, run_type) identifies the window.
 # scripts/notify_failure.py writes the same table with the same DDL (stdlib only).
-ALERTS_DDL = _SCHEMA[_SCHEMA.index("CREATE TABLE IF NOT EXISTS alerts") :]
+_ALERTS_START = _SCHEMA.index("CREATE TABLE IF NOT EXISTS alerts")
+_MISSED_START = _SCHEMA.index("CREATE TABLE IF NOT EXISTS missed_windows")
+ALERTS_DDL = _SCHEMA[_ALERTS_START:_MISSED_START]
+# A window whose catch-up period passed with no report: noted once, by the first
+# late trigger after the cutoff (scripts/missed_window.py, same DDL), so later late
+# triggers in that window end quietly instead of failing again.
+MISSED_DDL = _SCHEMA[_MISSED_START:]
 
 
 @dataclass(frozen=True)
@@ -118,6 +131,7 @@ class RunRecord:
     benchmark_symbol: str
     benchmark_ref: float | None
     universe_size: int
+    delayed: bool = False  # sent after its window, in the catch-up period
 
 
 @dataclass(frozen=True)
@@ -135,6 +149,10 @@ class History:
         path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            # history.db files created before the `delayed` column existed
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+            if "delayed" not in columns:
+                conn.execute("ALTER TABLE runs ADD COLUMN delayed INTEGER NOT NULL DEFAULT 0")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -170,7 +188,8 @@ class History:
         with self._connect() as conn:
             cur = conn.execute(
                 "INSERT INTO runs (run_date, run_type, generated_at_utc, data_session, "
-                "benchmark_symbol, benchmark_ref, universe_size) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "benchmark_symbol, benchmark_ref, universe_size, delayed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run.run_date.isoformat(),
                     run.run_type,
@@ -179,6 +198,7 @@ class History:
                     run.benchmark_symbol,
                     run.benchmark_ref,
                     run.universe_size,
+                    int(run.delayed),
                 ),
             )
             run_id = int(cur.lastrowid or 0)

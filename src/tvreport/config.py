@@ -101,8 +101,13 @@ class MondayWindow(_Strict):
     target: time = time(8, 0)
     earliest: time = time(6, 30)
     latest: time = time(9, 25)
+    catch_up_until: time = time(16, 0)
+    """A trigger after `latest` but no later than this, on a day with no report yet,
+    still sends the report, marked [DELAYED]. Later than this, the window is missed."""
 
-    parse_times = field_validator("target", "earliest", "latest", mode="before")(_parse_hhmm)
+    parse_times = field_validator("target", "earliest", "latest", "catch_up_until", mode="before")(
+        _parse_hhmm
+    )
 
     @model_validator(mode="after")
     def _ordered(self) -> MondayWindow:
@@ -110,6 +115,8 @@ class MondayWindow(_Strict):
             raise ValueError("schedule.monday must satisfy earliest <= target <= latest")
         if self.latest >= time(9, 30):
             raise ValueError("schedule.monday.latest must be before the 09:30 ET open")
+        if self.catch_up_until < self.latest:
+            raise ValueError("schedule.monday.catch_up_until must not be before latest")
         return self
 
 
@@ -119,8 +126,16 @@ class FridayWindow(_Strict):
     """Never run before the session close plus this many minutes. Data is 15-minute
     delayed, so anything earlier could capture an intraday price."""
     latest: time = time(18, 15)
+    catch_up_until: time = time(23, 59)
+    """As for Monday: a [DELAYED] report up to this time, then the window is missed."""
 
-    parse_times = field_validator("target", "latest", mode="before")(_parse_hhmm)
+    parse_times = field_validator("target", "latest", "catch_up_until", mode="before")(_parse_hhmm)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> FridayWindow:
+        if self.catch_up_until < self.latest:
+            raise ValueError("schedule.friday.catch_up_until must not be before latest")
+        return self
 
 
 class ScheduleConfig(_Strict):

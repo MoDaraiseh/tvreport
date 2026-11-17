@@ -2,7 +2,8 @@
 
 Order of operations for a real (non-dry) run:
   1. resolve the run type ('auto' = by New York weekday) and check the time
-     window (skipped with --force, e.g. a manual workflow_dispatch run);
+     window (skipped with --force, e.g. a manual workflow_dispatch run); after
+     the window, until the catch-up cutoff, the report is marked [DELAYED];
   2. skip quietly if this date + run type is already in history.db (idempotency);
   3. build the report, save reports/YYYY-MM-DD-<type>.html/.md, email it;
   4. record the run in history.db only after the email was sent.
@@ -110,11 +111,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     cfg = load_config(args.config)
     calendar = MarketCalendar()
+    delayed = False
     if not args.force:
         decision = gate(run_type, now, cfg.schedule, calendar)
         log.info("gate: %s", decision.reason)
         if not decision.proceed:
             return 0
+        delayed = decision.delayed
 
     # A dry run never writes history (not even a schema update or an empty file).
     history = _scratch_history(args.db) if args.dry_run else History(args.db)
@@ -140,6 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             dry_run=args.dry_run,
             holdings_path=args.holdings,
             calendar=calendar,
+            delayed=delayed,
         )
         html_path, md_path = save_report(outcome.report, args.reports_dir)
         log.info("saved %s and %s", html_path, md_path)

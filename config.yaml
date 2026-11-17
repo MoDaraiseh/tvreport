@@ -48,8 +48,11 @@ portfolio:                     # applies only if holdings.yaml exists
 
 schedule:
   timezone: America/New_York
-  monday: {target: "08:00", earliest: "06:30", latest: "09:25"}
-  friday: {target: "16:45", minutes_after_close: 30, latest: "18:15"}
+  # After `latest`, a report not yet sent goes out marked [DELAYED] until
+  # `catch_up_until`; after that the window is missed (one failure alert).
+  # The workflow's first-step gate uses the same times: keep them in step.
+  monday: {target: "08:00", earliest: "06:30", latest: "09:25", catch_up_until: "16:00"}
+  friday: {target: "16:45", minutes_after_close: 30, latest: "18:15", catch_up_until: "23:59"}
 
 provider:
   name: tradingview

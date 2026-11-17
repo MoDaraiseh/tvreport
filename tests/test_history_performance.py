@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -39,6 +41,26 @@ def test_idempotency_and_unique_constraint(tmp_path):
     assert not h.run_exists(monday, "friday")
     with pytest.raises(sqlite3.IntegrityError):
         h.record_run(run(monday, "monday"), [])
+
+
+def test_delayed_flag_and_upgrade_of_an_older_history_db(tmp_path):
+    db = tmp_path / "h.db"
+    with closing(sqlite3.connect(db)) as conn, conn:  # a runs table from before `delayed`
+        conn.execute(
+            "CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_date TEXT NOT NULL, "
+            "run_type TEXT NOT NULL, generated_at_utc TEXT NOT NULL, data_session TEXT NOT NULL, "
+            "benchmark_symbol TEXT NOT NULL, benchmark_ref REAL, universe_size INTEGER NOT NULL, "
+            "UNIQUE (run_date, run_type))"
+        )
+        conn.execute(
+            "INSERT INTO runs VALUES (NULL, '2026-10-26', 'monday', 't', '2026-10-23', 'S', 1, 9)"
+        )
+    h = History(db)
+    h.record_run(replace(run(date(2026, 11, 2), "monday"), delayed=True), [])
+    with closing(sqlite3.connect(db)) as conn:
+        rows = conn.execute("SELECT run_date, delayed FROM runs ORDER BY run_date").fetchall()
+    assert rows == [("2026-10-26", 0), ("2026-11-02", 1)]
+    History(db)  # opening it again is a no-op
 
 
 def test_failed_record_leaves_nothing_behind(tmp_path):

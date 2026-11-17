@@ -11,6 +11,10 @@ this module decides whether *this* trigger should do anything:
   a holiday) and no later than `latest` (default 18:15). This lower bound is what
   stops the EST equivalent of an EDT cron from firing at 15:45 ET, before the close.
 
+Catch-up: a trigger after `latest` but no later than `catch_up_until` (default
+16:00 ET Monday, 23:59 ET Friday) still proceeds, with `delayed=True`: the report
+goes out marked [DELAYED]. After `catch_up_until` the window is missed.
+
 Idempotency (one report per date + run type) is enforced separately in history.py.
 """
 
@@ -96,6 +100,7 @@ class MarketCalendar:
 class GateDecision:
     proceed: bool
     reason: str
+    delayed: bool = False  # after the window, inside the catch-up period
 
 
 def resolve_run_type(value: str, now: datetime) -> RunType | None:
@@ -125,6 +130,13 @@ def gate(
         win = cfg.monday
         if local.weekday() != 0:
             return GateDecision(False, f"{stamp}: not a Monday in New York")
+        if win.latest < local.time() <= win.catch_up_until:
+            return GateDecision(
+                True,
+                f"{stamp}: after the Monday window closed at {win.latest:%H:%M} ET; "
+                f"catching up until {win.catch_up_until:%H:%M} ET",
+                delayed=True,
+            )
         if not win.earliest <= local.time() <= win.latest:
             return GateDecision(
                 False,
@@ -136,6 +148,13 @@ def gate(
         return GateDecision(False, f"{stamp}: not a Friday in New York")
     earliest = friday_earliest(local.date(), cfg, cal)
     latest = datetime.combine(local.date(), cfg.friday.latest, NY)
+    if latest < local and local.time() <= cfg.friday.catch_up_until:
+        return GateDecision(
+            True,
+            f"{stamp}: after the Friday window closed at {latest:%H:%M} ET; "
+            f"catching up until {cfg.friday.catch_up_until:%H:%M} ET",
+            delayed=True,
+        )
     if not earliest <= local <= latest:
         return GateDecision(
             False, f"{stamp}: outside the Friday window {earliest:%H:%M}-{latest:%H:%M} ET"

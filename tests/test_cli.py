@@ -88,9 +88,54 @@ def test_not_a_run_day(harness):
 
 
 def test_outside_window_skips_without_fetching(harness):
-    harness["now"] = datetime(2026, 11, 2, 10, 0, tzinfo=NY)
+    harness["now"] = datetime(2026, 11, 2, 16, 1, tzinfo=NY)  # after the catch-up cutoff
     assert harness["run"]("--type", "auto") == 0
     assert harness["provider_calls"] == 0 and harness["sent"] == []
+
+
+def _runs(db: Path) -> list[tuple[str, int]]:
+    with closing(sqlite3.connect(db)) as conn:
+        return conn.execute("SELECT run_type, delayed FROM runs").fetchall()
+
+
+def test_late_trigger_sends_delayed_report_once(harness):
+    harness["now"] = datetime(2026, 11, 2, 10, 0, tzinfo=NY)  # after 09:25: catch-up period
+    assert harness["run"]("--type", "auto") == 0
+    assert len(harness["sent"]) == 1
+    msg = harness["sent"][0]
+    assert msg["Subject"] == "[DELAYED] Week Ahead — Mon 2 Nov 2026"
+    for part in ("plain", "html"):
+        body = msg.get_body((part,)).get_content()
+        assert "DELAYED — built at 10:00 ET, after the usual Monday window (06:30-09:25 ET)" in body
+        assert "The market was already open" in body
+    assert "DELAYED — built at 10:00 ET" in (harness["reports"] / "2026-11-02-monday.md").read_text(
+        encoding="utf-8"
+    )
+    assert _runs(harness["db"]) == [("monday", 1)]  # marked delayed in history
+
+    harness["now"] = datetime(2026, 11, 2, 15, 30, tzinfo=NY)  # a later late trigger
+    assert harness["run"]("--type", "auto") == 0
+    assert len(harness["sent"]) == 1 and harness["provider_calls"] == 1
+
+
+def test_pre_open_delayed_report_has_no_market_open_note(harness):
+    harness["now"] = datetime(2026, 11, 2, 9, 27, tzinfo=NY)
+    assert harness["run"]("--type", "auto") == 0
+    body = harness["sent"][0].get_body(("plain",)).get_content()
+    assert "DELAYED — built at 09:27 ET" in body
+    assert "already open" not in body
+
+
+def test_on_time_run_is_not_marked_delayed(harness):
+    assert harness["run"]("--type", "auto") == 0
+    assert "DELAYED" not in harness["sent"][0]["Subject"]
+    assert _runs(harness["db"]) == [("monday", 0)]
+
+
+def test_manual_run_after_the_window_is_not_marked_delayed(harness):
+    harness["now"] = datetime(2026, 11, 2, 12, 0, tzinfo=NY)
+    assert harness["run"]("--type", "monday", "--force") == 0
+    assert "DELAYED" not in harness["sent"][0]["Subject"]
 
 
 def test_dry_run_saves_report_but_no_email_or_history(harness, monkeypatch):

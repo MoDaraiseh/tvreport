@@ -12,6 +12,7 @@ import pytest
 from tests.workflow_gate import run_gate
 from tvreport.schedule import (
     NY,
+    GateDecision,
     RunType,
     friday_earliest,
     gate,
@@ -36,7 +37,7 @@ def ny(s: str) -> datetime:
         # Friday before the DST change (EDT): 20:45 UTC = 16:45 ET
         ("2026-10-30 20:45", "friday", True),
         ("2026-10-30 22:15", "friday", True),  # 18:15 ET, last minute
-        ("2026-10-30 22:30", "friday", False),  # 18:30 ET
+        ("2026-10-30 22:30", "friday", True),  # 18:30 ET: catch-up period, [DELAYED]
         # Friday after the change (EST): 20:45 UTC = 15:45 ET -- before the close
         ("2026-11-06 20:45", "friday", False),
         ("2026-11-06 21:30", "friday", True),  # 16:30 ET = close + 30
@@ -45,12 +46,14 @@ def ny(s: str) -> datetime:
         ("2026-11-02 12:00", "monday", True),
         ("2026-11-02 13:00", "monday", True),
         ("2026-11-02 14:25", "monday", True),  # 09:25 ET
-        ("2026-11-02 14:30", "monday", False),  # 09:30 ET: the open
+        ("2026-11-02 14:30", "monday", True),  # 09:30 ET: the open; catch-up period
+        ("2026-11-02 21:01", "monday", False),  # 16:01 ET: after the catch-up cutoff
         ("2026-11-02 11:15", "monday", False),  # 06:15 ET
         # Monday before the spring change (EST) and after it (EDT)
         ("2027-03-08 13:00", "monday", True),
         ("2027-03-15 12:00", "monday", True),  # 08:00 EDT
-        ("2027-03-15 14:00", "monday", False),  # 10:00 EDT
+        ("2027-03-15 14:00", "monday", True),  # 10:00 EDT: catch-up period
+        ("2027-03-15 20:01", "monday", False),  # 16:01 EDT
         ("2027-03-12 21:45", "friday", True),  # 16:45 EST
         ("2027-03-19 20:45", "friday", True),  # 16:45 EDT
         # Wrong weekday
@@ -62,10 +65,36 @@ def test_gate(when, run_type, proceed, cfg, calendar):
 
 
 def test_monday_window_edges(cfg, calendar):
-    assert not gate("monday", ny("2026-11-02 06:29"), cfg.schedule, calendar).proceed
-    assert gate("monday", ny("2026-11-02 06:30"), cfg.schedule, calendar).proceed
-    assert gate("monday", ny("2026-11-02 09:25"), cfg.schedule, calendar).proceed
-    assert not gate("monday", ny("2026-11-02 09:26"), cfg.schedule, calendar).proceed
+    def at(s: str) -> GateDecision:
+        return gate("monday", ny(s), cfg.schedule, calendar)
+
+    assert not at("2026-11-02 06:29").proceed
+    assert at("2026-11-02 06:30").proceed and not at("2026-11-02 06:30").delayed
+    assert at("2026-11-02 09:25").proceed and not at("2026-11-02 09:25").delayed
+    # after the window: catch-up until 16:00 ET, marked delayed
+    assert at("2026-11-02 09:26").proceed and at("2026-11-02 09:26").delayed
+    assert at("2026-11-02 16:00").proceed and at("2026-11-02 16:00").delayed
+    assert not at("2026-11-02 16:01").proceed
+
+
+def test_friday_catch_up_edges(cfg, calendar):
+    def at(s: str) -> GateDecision:
+        return gate("friday", ny(s), cfg.schedule, calendar)
+
+    assert at("2026-11-06 18:15").proceed and not at("2026-11-06 18:15").delayed
+    assert at("2026-11-06 18:16").proceed and at("2026-11-06 18:16").delayed
+    assert at("2026-11-06 23:59").proceed and at("2026-11-06 23:59").delayed
+    assert not at("2026-11-07 00:00").proceed  # Saturday
+    # early-close Friday: still no run before close + 30, catch-up after 18:15
+    assert not at("2026-11-27 13:29").proceed
+    assert at("2026-11-27 20:00").delayed
+
+
+def test_catch_up_cutoff_comes_from_config(cfg, calendar):
+    schedule = cfg.schedule.model_copy(
+        update={"monday": cfg.schedule.monday.model_copy(update={"catch_up_until": time(9, 25)})}
+    )
+    assert not gate("monday", ny("2026-11-02 09:26"), schedule, calendar).proceed
 
 
 def test_early_close_friday_window(cfg, calendar):
@@ -166,11 +195,11 @@ def test_crons_cover_every_window_across_dst(cfg, calendar):
 
 def test_workflow_gate_rejects_outside_windows():
     for when in (
-        "2026-11-02 14:30",
+        "2026-11-02 21:01",  # Monday 16:01 EST, after the catch-up cutoff
         "2026-11-02 10:15",
         "2026-11-04 13:00",
         "2026-11-06 18:00",  # 13:00 EST, before 13:30
-        "2026-11-06 23:30",
+        "2026-11-07 05:00",  # Saturday 00:00 EST
         "2026-11-07 21:45",
     ):
         assert run_gate(utc(when))["run"] == "false", when
@@ -210,47 +239,64 @@ def test_workflow_test_email_option():
     )
 
 
-# ------------------------------------------------------------------ missed windows
+# ------------------------------------------------------------------ late triggers
 # The 15 scheduled runs GitHub created between 30 Oct and 14 Nov 2026, all after
 # their window had closed (created_at, UTC). Each one used to end green.
+# "catch_up": inside the catch-up period, so it builds a [DELAYED] report;
+# "missed": after the cutoff (Monday 16:00 ET).
 LATE_TRIGGERS = [
-    ("2026-10-30 23:57", "friday"),  # Fri 19:57 EDT
-    ("2026-10-31 00:24", "friday"),
-    ("2026-10-31 02:02", "friday"),
-    ("2026-11-02 20:25", "monday"),  # Mon 15:25 EST
-    ("2026-11-02 20:38", "monday"),
-    ("2026-11-02 22:38", "monday"),
-    ("2026-11-07 00:13", "friday"),  # Fri 19:13 EST
-    ("2026-11-07 00:38", "friday"),
-    ("2026-11-07 02:33", "friday"),
-    ("2026-11-09 20:52", "monday"),
-    ("2026-11-09 21:18", "monday"),
-    ("2026-11-09 23:18", "monday"),
-    ("2026-11-14 00:58", "friday"),
-    ("2026-11-14 01:17", "friday"),
-    ("2026-11-14 02:54", "friday"),
+    ("2026-10-30 23:57", "friday", "catch_up"),  # Fri 19:57 EDT
+    ("2026-10-31 00:24", "friday", "catch_up"),
+    ("2026-10-31 02:02", "friday", "catch_up"),
+    ("2026-11-02 20:25", "monday", "catch_up"),  # Mon 15:25 EST
+    ("2026-11-02 20:38", "monday", "catch_up"),
+    ("2026-11-02 22:38", "monday", "missed"),  # Mon 17:38 EST
+    ("2026-11-07 00:13", "friday", "catch_up"),  # Fri 19:13 EST
+    ("2026-11-07 00:38", "friday", "catch_up"),
+    ("2026-11-07 02:33", "friday", "catch_up"),
+    ("2026-11-09 20:52", "monday", "catch_up"),  # Mon 15:52 EST
+    ("2026-11-09 21:18", "monday", "missed"),  # Mon 16:18 EST
+    ("2026-11-09 23:18", "monday", "missed"),
+    ("2026-11-14 00:58", "friday", "catch_up"),
+    ("2026-11-14 01:17", "friday", "catch_up"),
+    ("2026-11-14 02:54", "friday", "catch_up"),
 ]
 
 
-@pytest.mark.parametrize(("when", "run_type"), LATE_TRIGGERS)
-def test_workflow_gate_flags_late_scheduled_trigger(when, run_type):
-    assert run_gate(utc(when)) == {"run": "false", "run_type": "", "missed": run_type}
+@pytest.mark.parametrize(("when", "run_type", "outcome"), LATE_TRIGGERS)
+def test_workflow_gate_on_late_scheduled_triggers(when, run_type, outcome, cfg, calendar):
+    if outcome == "catch_up":
+        assert run_gate(utc(when)) == {"run": "true", "run_type": run_type, "missed": ""}
+        decision = gate(run_type, utc(when), cfg.schedule, calendar)
+        assert decision.proceed and decision.delayed  # the CLI agrees
+    else:
+        assert run_gate(utc(when)) == {"run": "false", "run_type": "", "missed": run_type}
+        assert not gate(run_type, utc(when), cfg.schedule, calendar).proceed
 
 
-def test_workflow_gate_missed_only_after_the_window_on_the_same_day():
+def test_first_late_trigger_of_each_window_would_have_caught_up():
+    first: dict[str, str] = {}
+    for when, _run_type, outcome in LATE_TRIGGERS:
+        first.setdefault(utc(when).astimezone(NY).date().isoformat(), outcome)
+    assert len(first) == 5 and set(first.values()) == {"catch_up"}
+
+
+def test_workflow_gate_missed_only_after_the_cutoff_on_the_same_day():
     for when in (
         "2026-11-02 11:15",  # Monday 06:15 EST: before the window
+        "2026-11-02 14:26",  # Monday 09:26 EST: catch-up period
         "2026-11-06 18:00",  # Friday 13:00 EST: before the earliest start
+        "2026-11-06 23:16",  # Friday 18:16 EST: catch-up period
         "2026-11-04 23:00",  # Wednesday
         "2026-11-07 12:00",  # Saturday morning in New York
     ):
         assert run_gate(utc(when))["missed"] == "", when
-    assert run_gate(utc("2026-11-02 14:26"))["missed"] == "monday"  # 09:26 EST
-    assert run_gate(utc("2026-11-06 23:16"))["missed"] == "friday"  # 18:16 EST
+    assert run_gate(utc("2026-11-02 21:01"))["missed"] == "monday"  # 16:01 EST
+    assert run_gate(utc("2026-11-07 04:59:30"))["missed"] == "friday"  # 23:59:30 EST
 
 
 def test_workflow_gate_missed_for_dispatch():
-    late_monday = utc("2026-11-09 20:52")
+    late_monday = utc("2026-11-09 21:18")  # 16:18 EST
     # an outside scheduler's `auto` call that would send email counts as missed
     assert run_gate(late_monday, "workflow_dispatch", "auto", "false")["missed"] == "monday"
     # a dry run never does
@@ -284,8 +330,9 @@ def test_workflow_missed_window_fails_and_alerts_once():
         "steps.gate.outputs.missed != '' && steps.sent.outputs.sent != 'true'"
     )
     block = text.split("- name: Missed window", 1)[1].split("\n      - ", 1)[0]
-    assert "scripts/notify_failure.py" in block  # the shared once-per-window alert
-    assert block.rstrip().endswith("exit 1")  # always fails, even if the email can't send
+    # fails the first late trigger per window, then ends quietly (tests/test_missed_window.py)
+    assert "python3 -m scripts.missed_window" in block
+    assert "|| true" not in block
     # the alert record is committed, so later late triggers in the window don't re-email
     assert "steps.gate.outputs.missed != ''" in steps["Commit history and reports"]
     # the already-sent check runs for a missed trigger, so a sent report stays green

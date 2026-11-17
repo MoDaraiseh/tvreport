@@ -26,6 +26,10 @@ Generated {{ r.generated_times|join(" · ") }}
 
 > **DRY RUN** — not emailed, not recorded in history.
 {% endif %}
+{% if r.delayed_note %}
+
+> **{{ r.delayed_note }}**
+{% endif %}
 {% for n in r.session_notes %}
 
 > {{ n }}

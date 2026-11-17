@@ -49,6 +49,7 @@ class ReportData:
     performance: PerformanceSection | None = None
     dry_run: bool = False
     test_email: bool = False  # sent only to verify delivery; never recorded
+    delayed_note: str | None = None  # set when sent after its window (catch-up period)
     disclaimer: str = DISCLAIMER
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -59,7 +60,11 @@ class ReportData:
     @property
     def subject(self) -> str:
         d = self.run_date
-        prefix = "[TEST] " if self.test_email else "[DRY RUN] " if self.dry_run else ""
+        if self.test_email:
+            prefix = "[TEST] "
+        else:
+            prefix = "[DRY RUN] " if self.dry_run else ""
+            prefix += "[DELAYED] " if self.delayed_note else ""
         return f"{prefix}{self.title} — {d:%a} {d.day} {d:%b %Y}"
 
     @property
