@@ -1,7 +1,7 @@
 # Development / CI tools, exact versions.
 -r requirements.txt
-pytest==9.1.1
-ruff==0.17.3
+pytest==9.2.0
+ruff==0.17.5
 mypy==2.4.1
 pandas-stubs==3.1.0.261029
 types-PyYAML==6.0.12.20260906
